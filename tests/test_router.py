@@ -13,6 +13,19 @@ from awesome_python_auth.password_utils import hash_password
 
 SECRET = "router-test-secret"
 
+
+def _run(coro):
+    """Run a store coroutine to completion from a synchronous test.
+
+    These tests are synchronous and drive the app through ``TestClient``, which
+    runs the ASGI app on its own event loop. ``InMemoryUserStore`` holds no
+    loop-bound state, so a private loop is enough. ``asyncio.run`` does not
+    depend on a "current" event loop left behind by pytest-asyncio, unlike
+    ``asyncio.get_event_loop().run_until_complete(...)``.
+    """
+    return asyncio.run(coro)
+
+
 # ---------------------------------------------------------------------------
 # App fixture
 # ---------------------------------------------------------------------------
@@ -53,8 +66,7 @@ def registered_user(user_store):
         last_name="Smith",
         is_email_verified=True,
     )
-    import asyncio
-    asyncio.get_event_loop().run_until_complete(user_store.create(stored))
+    _run(user_store.create(stored))
     return stored
 
 
@@ -87,10 +99,7 @@ class TestRegister:
             json={"email": "UPPER@EXAMPLE.COM", "password": "Pass1234!"},
         )
         assert resp.status_code == 201
-        import asyncio
-        user = asyncio.get_event_loop().run_until_complete(
-            user_store.get_by_email("upper@example.com")
-        )
+        user = _run(user_store.get_by_email("upper@example.com"))
         assert user is not None
 
 
@@ -147,7 +156,7 @@ class TestLogin:
             last_name="User",
             is_email_verified=True,
         )
-        asyncio.get_event_loop().run_until_complete(user_store.create(stored))
+        _run(user_store.create(stored))
 
         login_resp = local_client.post(
             "/api/auth/login",
@@ -390,10 +399,7 @@ class TestDeleteAccount:
             headers={"Authorization": f"Bearer {token}"},
         )
         assert del_resp.status_code == 200
-        import asyncio
-        user = asyncio.get_event_loop().run_until_complete(
-            user_store.get_by_email("alice@example.com")
-        )
+        user = _run(user_store.get_by_email("alice@example.com"))
         assert user is None
 
 
@@ -424,7 +430,7 @@ class TestOauthEndpoints:
             last_name="User",
             is_email_verified=True,
         )
-        asyncio.get_event_loop().run_until_complete(user_store.create(stored))
+        _run(user_store.create(stored))
 
         async def on_oauth_callback(provider, request):
             return {"userId": stored.id, "redirectTo": "/welcome"}
@@ -455,7 +461,7 @@ class TestStatefulSessionPolicies:
             last_name="Calls",
             is_email_verified=True,
         )
-        asyncio.get_event_loop().run_until_complete(user_store.create(stored))
+        _run(user_store.create(stored))
 
         config = AuthConfig(
             api_prefix="/api/auth",
@@ -475,7 +481,7 @@ class TestStatefulSessionPolicies:
         access_token = login_resp.json()["accessToken"]
         refresh_token = login_resp.json()["refreshToken"]
         handle = decode_token(refresh_token, SECRET)["sessionHandle"]
-        asyncio.get_event_loop().run_until_complete(user_store.delete_session(handle))
+        _run(user_store.delete_session(handle))
 
         resp = client.get("/api/auth/me", headers={"Authorization": f"Bearer {access_token}"})
         assert resp.status_code == 401
@@ -489,7 +495,7 @@ class TestStatefulSessionPolicies:
             last_name="Fresh",
             is_email_verified=True,
         )
-        asyncio.get_event_loop().run_until_complete(user_store.create(stored))
+        _run(user_store.create(stored))
 
         config = AuthConfig(
             api_prefix="/api/auth",
@@ -508,7 +514,7 @@ class TestStatefulSessionPolicies:
         )
         refresh_token = login_resp.json()["refreshToken"]
         handle = decode_token(refresh_token, SECRET)["sessionHandle"]
-        asyncio.get_event_loop().run_until_complete(user_store.delete_session(handle))
+        _run(user_store.delete_session(handle))
 
         refresh_resp = client.post("/api/auth/refresh", json={"refreshToken": refresh_token})
         assert refresh_resp.status_code == 401
