@@ -4,11 +4,11 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-green.svg)](https://fastapi.tiangolo.com)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-**FastAPI authentication library** that replicates the [awesome-node-auth](https://github.com/nik2208/awesome-node-auth) Node.js backend in Python.
+**FastAPI authentication library** that replicates the [awesome-node-auth](https://github.com/awesome-lang-auth/awesome-node-auth) Node.js backend in Python.
 
 Fully compatible with:
-- **[ng-awesome-node-auth](https://github.com/nik2208/ng-awesome-node-auth)** — Angular client library
-- **[awesome-node-auth-flutter](https://github.com/nik2208/awesome-node-auth-flutter)** — Flutter/Dart client library
+- **[ng-awesome-node-auth](https://github.com/awesome-lang-auth/awesome-angular-auth)** — Angular client library
+- **[awesome-node-auth-flutter](https://github.com/awesome-lang-auth/awesome-flutter-auth)** — Flutter/Dart client library
 
 Supports **both authentication strategies** used by those clients:
 | Platform | Strategy | Token |

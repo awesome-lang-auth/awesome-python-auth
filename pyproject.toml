@@ -40,6 +40,10 @@ dev = [
     "uvicorn>=0.30.0",
 ]
 
+[project.urls]
+Repository = "https://github.com/awesome-lang-auth/awesome-python-auth"
+Issues = "https://github.com/awesome-lang-auth/awesome-python-auth/issues"
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
