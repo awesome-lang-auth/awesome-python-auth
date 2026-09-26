@@ -5,7 +5,7 @@ Thank you for your interest in contributing! This guide explains how to get star
 ## Development setup
 
 ```bash
-git clone https://github.com/nik2208/awesome-python-auth
+git clone https://github.com/awesome-lang-auth/awesome-python-auth
 cd awesome-python-auth
 pip install -e ".[dev]"
 python -m pytest tests/ -v   # run the full test suite

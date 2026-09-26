@@ -40,6 +40,6 @@ jobs:
         # No API token needed — uses OIDC Trusted Publishing.
         # Configure Trusted Publishing in your PyPI project settings:
         #   Publisher: GitHub Actions
-        #   Owner: nik2208
+        #   Owner: awesome-lang-auth
         #   Repository: awesome-python-auth
         #   Workflow: publish.yml
