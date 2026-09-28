@@ -51,6 +51,8 @@ GET  /tools/stream (SSE)
 from __future__ import annotations
 
 import hashlib
+import logging
+import re
 import time
 from datetime import datetime, timezone
 from typing import Any
@@ -66,6 +68,7 @@ from .dependencies import (
     get_current_user,
     require_auth,
 )
+from .events import AuthEventNames
 from .jwt_utils import (
     create_access_token,
     create_refresh_token,
@@ -187,6 +190,47 @@ async def _resolve_hook_result(hook: Any, *args: Any) -> Any:
     return value
 
 
+logger = logging.getLogger(__name__)
+
+_CORRELATION_ID_PATTERN = re.compile(r"^[\w.:-]{1,128}$")
+_MAX_EVENT_EMAIL_LENGTH = 320
+
+
+def _request_event_context(request: Request | None) -> dict[str, Any]:
+    if request is None:
+        return {}
+    corr_header = request.headers.get("x-correlation-id")
+    correlation_id = (
+        corr_header
+        if corr_header and _CORRELATION_ID_PATTERN.match(corr_header)
+        else None
+    )
+    return {
+        "ip": request.client.host if request.client else None,
+        "userAgent": request.headers.get("user-agent"),
+        "correlationId": correlation_id,
+    }
+
+
+def _event_email(value: Any) -> str | None:
+    if isinstance(value, str):
+        return value[:_MAX_EVENT_EMAIL_LENGTH]
+    return None
+
+
+def _oauth_conflict_data(provider: str, err_data: Any) -> dict[str, Any]:
+    if not isinstance(err_data, dict):
+        return {"provider": provider}
+    data: dict[str, Any] = {"provider": provider}
+    email = _event_email(err_data.get("email"))
+    if email:
+        data["email"] = email
+    acct_id = err_data.get("providerAccountId") or err_data.get("provider_account_id")
+    if isinstance(acct_id, str):
+        data["providerAccountId"] = acct_id
+    return data
+
+
 class AuthConfigurator:
     """Entry point for configuring the auth system.
 
@@ -218,6 +262,7 @@ class AuthConfigurator:
         *,
         settings_store: SettingsStore | None = None,
         on_register: Any = None,
+        event_bus: Any = None,
     ) -> APIRouter:
         """Return a configured :class:`fastapi.APIRouter`.
 
@@ -229,9 +274,42 @@ class AuthConfigurator:
             Optional async callable ``(data: StoredUser) -> StoredUser`` called
             just before a new user is persisted.  Use it to add custom logic
             (e.g. role assignment, email sending).
+        event_bus:
+            Optional :class:`~awesome_python_auth.events.AuthEventBus` instance
+            for auto-publishing authentication and lifecycle events.
         """
         cfg = self._config
         store = self._store
+
+        effective_event_bus = (
+            event_bus
+            if event_bus is not None
+            else (
+                getattr(cfg, "event_bus", None)
+                or (
+                    getattr(cfg.tools, "event_bus", None)
+                    if getattr(cfg, "tools", None)
+                    else None
+                )
+            )
+        )
+
+        def _emit(
+            event_name: str,
+            payload: dict[str, Any],
+            req: Request | None = None,
+        ) -> None:
+            if effective_event_bus is None:
+                return
+            ctx = _request_event_context(req)
+            merged = {**ctx, **payload}
+            clean = {k: v for k, v in merged.items() if v is not None}
+            if "data" in clean and isinstance(clean["data"], dict):
+                clean["data"] = {k: v for k, v in clean["data"].items() if v is not None}
+            try:
+                effective_event_bus.publish(event_name, clean)
+            except Exception:
+                logger.exception("AuthEventBus: error publishing %s", event_name)
 
         router = APIRouter(prefix=cfg.api_prefix)
 
@@ -395,6 +473,11 @@ class AuthConfigurator:
         async def login(body: LoginBody, request: Request, response: Response) -> dict:
             stored = await store.get_by_email(body.email)
             if not stored or not verify_password(body.password, stored.hashed_password or ""):
+                fail_data: dict[str, Any] = {"method": "password"}
+                email_clean = _event_email(body.email)
+                if email_clean:
+                    fail_data["email"] = email_clean
+                _emit(AuthEventNames.AUTH_LOGIN_FAILED, {"data": fail_data}, request)
                 raise HTTPException(status_code=401, detail="Invalid credentials")
 
             # 2FA required?
@@ -408,9 +491,19 @@ class AuthConfigurator:
                     "available2faMethods": ["totp"],
                 }
 
-            access_token, refresh_token, _session = await _create_session(stored, request)
+            access_token, refresh_token, session = await _create_session(stored, request)
             stored.last_login = datetime.now(timezone.utc)
             await store.update(stored)
+            _emit(
+                AuthEventNames.AUTH_LOGIN_SUCCESS,
+                {
+                    "userId": stored.id,
+                    "tenantId": getattr(stored, "tenant_id", None),
+                    "sessionId": session.handle if session else None,
+                    "data": {"method": "password"},
+                },
+                request,
+            )
             return _send_tokens(request, response, access_token, refresh_token, stored)
 
         # ── /register ────────────────────────────────────────────────────────
@@ -438,27 +531,72 @@ class AuthConfigurator:
                 # Placeholder: send verification email
                 pass
 
+            _emit(
+                AuthEventNames.USER_CREATED,
+                {
+                    "userId": new_user.id,
+                    "tenantId": getattr(new_user, "tenant_id", None),
+                    "data": {
+                        "email": _event_email(new_user.email),
+                        "method": "custom" if on_register else "default",
+                    },
+                },
+                request,
+            )
+
             return {"success": True, "userId": new_user.id}
 
         # ── /logout ──────────────────────────────────────────────────────────
 
         @router.post("/logout")
         async def logout(request: Request, response: Response) -> dict:
+            user_id: str | None = None
+            handle: str | None = None
             refresh_cookie = _read_cookie(request, refresh_cookie_names)
             if refresh_cookie:
                 try:
                     payload = decode_token(refresh_cookie, secret)
                     handle = payload.get("sessionHandle")
+                    user_id = payload.get("sub")
                     if handle:
                         await store.delete_session(handle)
                 except Exception:
                     pass
+            if not user_id:
+                access_cookie = _read_cookie(request, access_cookie_names)
+                if access_cookie:
+                    try:
+                        p = decode_token(access_cookie, secret)
+                        user_id = p.get("sub")
+                        if not handle:
+                            handle = p.get("sessionHandle")
+                    except Exception:
+                        pass
+            if not user_id:
+                auth_header = request.headers.get("authorization", "")
+                if auth_header.lower().startswith("bearer "):
+                    token = auth_header[7:].strip()
+                    try:
+                        p = decode_token(token, secret)
+                        user_id = p.get("sub")
+                        if not handle:
+                            handle = p.get("sessionHandle")
+                    except Exception:
+                        pass
             _clear_auth_cookies(
                 response,
                 secure=secure,
                 domain=domain,
                 access_cookie_names=access_cookie_names,
                 refresh_cookie_names=refresh_cookie_names,
+            )
+            _emit(
+                AuthEventNames.AUTH_LOGOUT,
+                {
+                    "userId": user_id,
+                    "sessionId": handle,
+                },
+                request,
             )
             return {"success": True}
 
@@ -514,6 +652,17 @@ class AuthConfigurator:
                 stored_session.last_active_at = datetime.now(timezone.utc)
                 await store.update_session(stored_session)
 
+            _emit(
+                AuthEventNames.SESSION_ROTATED,
+                {
+                    "userId": stored_user.id,
+                    "tenantId": getattr(stored_user, "tenant_id", None),
+                    "sessionId": session_handle,
+                    "data": {"previousSessionId": session_handle},
+                },
+                request,
+            )
+
             if _is_bearer(request):
                 return {"success": True, "accessToken": access_token, "refreshToken": new_refresh}
 
@@ -564,6 +713,14 @@ class AuthConfigurator:
                 access_cookie_names=access_cookie_names,
                 refresh_cookie_names=refresh_cookie_names,
             )
+            _emit(
+                AuthEventNames.USER_DELETED,
+                {
+                    "userId": user.sub,
+                    "tenantId": getattr(user, "tenant_id", None),
+                },
+                request,
+            )
             return {"success": True}
 
         # ── /forgot-password ─────────────────────────────────────────────────
@@ -585,7 +742,7 @@ class AuthConfigurator:
         # ── /reset-password ──────────────────────────────────────────────────
 
         @router.post("/reset-password")
-        async def reset_password(body: ResetPasswordBody) -> dict:
+        async def reset_password(body: ResetPasswordBody, request: Request) -> dict:
             hashed = _hash_token(body.token)
             found = await store.find_by_reset_token(hashed)
             if not found:
@@ -593,6 +750,14 @@ class AuthConfigurator:
             found.hashed_password = hash_password(body.password)
             found.reset_password_token = None
             await store.update(found)
+            _emit(
+                AuthEventNames.USER_PASSWORD_CHANGED,
+                {
+                    "userId": found.id,
+                    "tenantId": getattr(found, "tenant_id", None),
+                },
+                request,
+            )
             return {"success": True}
 
         # ── /change-password ─────────────────────────────────────────────────
@@ -600,6 +765,7 @@ class AuthConfigurator:
         @router.post("/change-password")
         async def change_password(
             body: ChangePasswordBody,
+            request: Request,
             user: AuthUser = Depends(require_auth),
         ) -> dict:
             stored = await store.get_by_id(user.sub)
@@ -611,6 +777,14 @@ class AuthConfigurator:
                 raise HTTPException(status_code=400, detail="Current password is incorrect")
             stored.hashed_password = hash_password(body.new_password)
             await store.update(stored)
+            _emit(
+                AuthEventNames.USER_PASSWORD_CHANGED,
+                {
+                    "userId": user.sub,
+                    "tenantId": getattr(user, "tenant_id", None),
+                },
+                request,
+            )
             return {"success": True}
 
         # ── /send-verification-email ─────────────────────────────────────────
@@ -634,7 +808,7 @@ class AuthConfigurator:
         # ── /verify-email ────────────────────────────────────────────────────
 
         @router.get("/verify-email")
-        async def verify_email(token: str) -> dict:
+        async def verify_email(token: str, request: Request) -> dict:
             hashed = _hash_token(token)
             found = await store.find_by_verification_token(hashed)
             if not found:
@@ -642,6 +816,14 @@ class AuthConfigurator:
             found.is_email_verified = True
             found.verification_token = None
             await store.update(found)
+            _emit(
+                AuthEventNames.USER_EMAIL_VERIFIED,
+                {
+                    "userId": found.id,
+                    "tenantId": getattr(found, "tenant_id", None),
+                },
+                request,
+            )
             return {"success": True}
 
         # ── /change-email/* ──────────────────────────────────────────────────
@@ -675,12 +857,26 @@ class AuthConfigurator:
             found = await store.find_by_pending_email_token(hashed)
             if not found:
                 raise HTTPException(status_code=400, detail="Invalid or expired token")
-            found.email = found.pending_email or found.email
+            old_email = found.email
+            new_email = found.pending_email or found.email
+            found.email = new_email
             found.pending_email = None
             found.pending_email_token = None
             await store.update(found)
             # Reissue tokens with updated email
-            access_token, refresh_token, _ = await _create_session(found, request)
+            access_token, refresh_token, session = await _create_session(found, request)
+            _emit(
+                AuthEventNames.USER_EMAIL_CHANGED,
+                {
+                    "userId": found.id,
+                    "tenantId": getattr(found, "tenant_id", None),
+                    "data": {
+                        "oldEmail": _event_email(old_email),
+                        "newEmail": _event_email(new_email),
+                    },
+                },
+                request,
+            )
             if _is_bearer(request):
                 return {"success": True, "accessToken": access_token, "refreshToken": refresh_token}
             _set_auth_cookies(
@@ -688,6 +884,8 @@ class AuthConfigurator:
                 secure=secure, same_site=same_site,
                 access_expires=access_exp, refresh_expires=refresh_exp,
                 domain=domain,
+                access_cookie_name=access_cookie_name,
+                refresh_cookie_name=refresh_cookie_name,
             )
             return {"success": True}
 
@@ -711,7 +909,17 @@ class AuthConfigurator:
                 if result:
                     stored = await store.get_by_id(result)
                     if stored:
-                        access_token, refresh_token, _ = await _create_session(stored, request)
+                        access_token, refresh_token, session = await _create_session(stored, request)
+                        _emit(
+                            AuthEventNames.AUTH_LOGIN_SUCCESS,
+                            {
+                                "userId": stored.id,
+                                "tenantId": getattr(stored, "tenant_id", None),
+                                "sessionId": session.handle if session else None,
+                                "data": {"method": "magic-link"},
+                            },
+                            request,
+                        )
                         return _send_tokens(request, response, access_token, refresh_token, stored)
             raise HTTPException(status_code=400, detail="Invalid or expired magic link")
 
@@ -734,7 +942,17 @@ class AuthConfigurator:
                 if result:
                     stored = await store.get_by_id(result)
                     if stored:
-                        access_token, refresh_token, _ = await _create_session(stored, request)
+                        access_token, refresh_token, session = await _create_session(stored, request)
+                        _emit(
+                            AuthEventNames.AUTH_LOGIN_SUCCESS,
+                            {
+                                "userId": stored.id,
+                                "tenantId": getattr(stored, "tenant_id", None),
+                                "sessionId": session.handle if session else None,
+                                "data": {"method": "sms"},
+                            },
+                            request,
+                        )
                         return _send_tokens(request, response, access_token, refresh_token, stored)
             raise HTTPException(status_code=400, detail="Invalid SMS code")
 
@@ -778,6 +996,7 @@ class AuthConfigurator:
         @router.post("/2fa/verify-setup")
         async def verify_2fa_setup(
             body: Verify2faSetupBody,
+            request: Request,
             user: AuthUser = Depends(require_auth),
         ) -> dict:
             totp = pyotp.TOTP(body.secret)
@@ -789,6 +1008,14 @@ class AuthConfigurator:
             stored.is_totp_enabled = True
             stored.totp_secret = body.secret
             await store.update(stored)
+            _emit(
+                AuthEventNames.USER_2FA_ENABLED,
+                {
+                    "userId": user.sub,
+                    "tenantId": getattr(user, "tenant_id", None),
+                },
+                request,
+            )
             return {"success": True}
 
         @router.post("/2fa/verify")
@@ -808,11 +1035,22 @@ class AuthConfigurator:
             totp = pyotp.TOTP(stored.totp_secret)
             if not totp.verify(body.totp_code, valid_window=1):
                 raise HTTPException(status_code=400, detail="Invalid TOTP code")
-            access_token, refresh_token, _ = await _create_session(stored, request)
+            access_token, refresh_token, session = await _create_session(stored, request)
+            _emit(
+                AuthEventNames.AUTH_LOGIN_SUCCESS,
+                {
+                    "userId": stored.id,
+                    "tenantId": getattr(stored, "tenant_id", None),
+                    "sessionId": session.handle if session else None,
+                    "data": {"method": "totp"},
+                },
+                request,
+            )
             return _send_tokens(request, response, access_token, refresh_token, stored)
 
         @router.post("/2fa/disable")
         async def disable_2fa(
+            request: Request,
             user: AuthUser = Depends(require_auth),
         ) -> dict:
             stored = await store.get_by_id(user.sub)
@@ -821,6 +1059,14 @@ class AuthConfigurator:
             stored.is_totp_enabled = False
             stored.totp_secret = None
             await store.update(stored)
+            _emit(
+                AuthEventNames.USER_2FA_DISABLED,
+                {
+                    "userId": user.sub,
+                    "tenantId": getattr(user, "tenant_id", None),
+                },
+                request,
+            )
             return {"success": True}
 
         # ── /sessions/* ──────────────────────────────────────────────────────
@@ -939,7 +1185,30 @@ class AuthConfigurator:
         async def oauth_callback(provider: str, request: Request):
             if not cfg.on_oauth_callback:
                 raise HTTPException(status_code=404, detail="OAuth provider not configured")
-            result = await _resolve_hook_result(cfg.on_oauth_callback, provider, request)
+            try:
+                result = await _resolve_hook_result(cfg.on_oauth_callback, provider, request)
+            except Exception as exc:
+                code = getattr(exc, "code", None) or getattr(exc, "error_code", None)
+                detail = getattr(exc, "detail", None)
+                if isinstance(detail, dict):
+                    err_data = detail.get("data") if isinstance(detail.get("data"), dict) else detail
+                    if not code:
+                        code = detail.get("error") or detail.get("code")
+                else:
+                    err_data = getattr(exc, "data", None) or {}
+                if (
+                    code == "OAUTH_ACCOUNT_CONFLICT"
+                    or getattr(exc, "status_code", None) == 409
+                    or (isinstance(exc, HTTPException) and exc.status_code == 409)
+                ):
+                    conflict_data = _oauth_conflict_data(provider, err_data if isinstance(err_data, dict) else {})
+                    _emit(
+                        AuthEventNames.AUTH_OAUTH_CONFLICT,
+                        {"data": conflict_data},
+                        request,
+                    )
+                raise
+
             redirect_to = "/"
             login_after = True
             user_id: str | None = None
@@ -949,6 +1218,13 @@ class AuthConfigurator:
             elif isinstance(result, StoredUser):
                 user_id = result.id
             elif isinstance(result, dict):
+                if result.get("error") == "OAUTH_ACCOUNT_CONFLICT" or result.get("code") == "OAUTH_ACCOUNT_CONFLICT":
+                    conflict_data = _oauth_conflict_data(provider, result)
+                    _emit(
+                        AuthEventNames.AUTH_OAUTH_CONFLICT,
+                        {"data": conflict_data},
+                        request,
+                    )
                 user_id = result.get("userId") or result.get("user_id")
                 if result.get("redirectTo") or result.get("redirect_to"):
                     redirect_to = result.get("redirectTo") or result.get("redirect_to")
@@ -968,7 +1244,7 @@ class AuthConfigurator:
             stored = await store.get_by_id(user_id)
             if not stored:
                 raise HTTPException(status_code=404, detail="User not found")
-            access_token, refresh_token, _ = await _create_session(stored, request)
+            access_token, refresh_token, session = await _create_session(stored, request)
             _set_auth_cookies(
                 redirect,
                 access_token,
@@ -980,6 +1256,19 @@ class AuthConfigurator:
                 domain=domain,
                 access_cookie_name=access_cookie_name,
                 refresh_cookie_name=refresh_cookie_name,
+            )
+            _emit(
+                AuthEventNames.AUTH_OAUTH_SUCCESS,
+                {
+                    "userId": stored.id,
+                    "tenantId": getattr(stored, "tenant_id", None),
+                    "sessionId": session.handle if session else None,
+                    "data": {
+                        "provider": provider,
+                        "redirectTo": redirect_to,
+                    },
+                },
+                request,
             )
             return redirect
 
