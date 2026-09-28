@@ -134,6 +134,10 @@ class AuthConfig:
     # Optional: provide an AuthTools instance to enable telemetry, SSE, webhooks.
     tools: Any = None  # AuthTools | None
 
+    # ── Event bus integration ────────────────────────────────────────────────
+    # Optional: provide an AuthEventBus instance for auto-publishing auth events.
+    event_bus: Any = None  # AuthEventBus | None
+
     # ── API Keys ─────────────────────────────────────────────────────────────
     # Optional: provide an ApiKeyStore to enable API key auth on /api-keys/* endpoints.
     api_key_store: Any = None  # ApiKeyStore | None

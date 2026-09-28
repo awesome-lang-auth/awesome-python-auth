@@ -41,7 +41,9 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from .dependencies import get_current_user
-from .models import AuthUser, SessionInfo, StoredUser, UserStore, SettingsStore
+from .events import AuthEventNames
+from .models import AuthUser, SessionInfo, SettingsStore, StoredUser, UserStore
+from .router import _request_event_context
 
 _ASSETS_DIR = Path(__file__).parent / "ui_assets"
 
@@ -102,6 +104,7 @@ def build_admin_router(
     api_key_store: Any = None,
     webhook_store: Any = None,
     access_policy: AdminAccessPolicy = "is-admin-flag",
+    event_bus: Any = None,
 ) -> APIRouter:
     """Return a configured admin :class:`fastapi.APIRouter`.
 
@@ -131,8 +134,12 @@ def build_admin_router(
         Optional — enables the Webhooks tab.
     access_policy:
         One of ``"is-admin-flag"`` (default), ``"first-user"``, or ``"open"``.
+    event_bus:
+        Optional :class:`~awesome_python_auth.events.AuthEventBus` instance
+        for auto-publishing admin and role lifecycle events.
     """
     router = APIRouter()
+    effective_event_bus = event_bus if event_bus is not None else getattr(config, "event_bus", None)
 
     # ------------------------------------------------------------------
     # Admin guard dependency
@@ -256,25 +263,60 @@ def build_admin_router(
     async def add_user_role(
         user_id: str,
         body: dict,
+        request: Request = None,  # type: ignore[assignment]
         admin: AuthUser = Depends(admin_user),
     ) -> dict:
         if rbac_store is None:
             raise HTTPException(status_code=501, detail="RBAC store not configured")
         role = body.get("role", "")
+        tenant_id = body.get("tenantId") or body.get("tenant_id")
         if not role:
             raise HTTPException(status_code=400, detail="role is required")
-        await rbac_store.add_role_to_user(user_id, role)
+        await rbac_store.add_role_to_user(user_id, role, tenant_id=tenant_id)
+        if effective_event_bus is not None:
+            ctx = _request_event_context(request)
+            data: dict[str, Any] = {"role": role}
+            if access_policy != "open" and admin:
+                data["actorId"] = admin.sub
+            ev_payload: dict[str, Any] = {
+                **ctx,
+                "userId": user_id,
+                "data": data,
+            }
+            if tenant_id:
+                ev_payload["tenantId"] = tenant_id
+            try:
+                effective_event_bus.publish(AuthEventNames.ROLE_ASSIGNED, ev_payload)
+            except Exception:
+                pass
         return {"success": True}
 
     @router.delete("/api/users/{user_id}/roles/{role}", status_code=204)
     async def remove_user_role(
         user_id: str,
         role: str,
+        request: Request = None,  # type: ignore[assignment]
         admin: AuthUser = Depends(admin_user),
     ) -> Response:
         if rbac_store is None:
             raise HTTPException(status_code=501, detail="RBAC store not configured")
         await rbac_store.remove_role_from_user(user_id, role)
+        if effective_event_bus is not None:
+            ctx = _request_event_context(request)
+            data: dict[str, Any] = {"role": role}
+            if access_policy != "open" and admin:
+                data["actorId"] = admin.sub
+            try:
+                effective_event_bus.publish(
+                    AuthEventNames.ROLE_REVOKED,
+                    {
+                        **ctx,
+                        "userId": user_id,
+                        "data": data,
+                    },
+                )
+            except Exception:
+                pass
         return Response(status_code=204)
 
     # ------------------------------------------------------------------
