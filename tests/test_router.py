@@ -104,6 +104,135 @@ class TestRegister:
 
 
 # ---------------------------------------------------------------------------
+# Register - AuthConfig.issue_session_on_register
+# ---------------------------------------------------------------------------
+
+
+def _register_client(user_store, *, issue_session, on_register=None, event_bus=None):
+    config = AuthConfig(
+        api_prefix="/api/auth",
+        access_token_secret=SECRET,
+        cookie_secure=False,
+        cookie_same_site="lax",
+        issue_session_on_register=issue_session,
+        event_bus=event_bus,
+    )
+    fastapi_app = FastAPI()
+    fastapi_app.include_router(
+        AuthConfigurator(config, user_store).router(on_register=on_register)
+    )
+    return TestClient(fastapi_app, raise_server_exceptions=True)
+
+
+_NEW_USER = {"email": "carol@example.com", "password": "Pass1234!", "firstName": "Carol"}
+
+
+class TestRegisterIssueSession:
+    def test_default_is_off(self):
+        assert AuthConfig().issue_session_on_register is False
+
+    def test_off_answers_success_and_user_id_only(self, user_store):
+        local_client = _register_client(user_store, issue_session=False)
+        resp = local_client.post("/api/auth/register", json=_NEW_USER)
+        assert resp.status_code == 201
+        data = resp.json()
+        assert set(data) == {"success", "userId"}
+        assert data["success"] is True
+        assert "set-cookie" not in resp.headers
+        assert _run(user_store.get_sessions_for_user(data["userId"])) == []
+        assert local_client.get("/api/auth/me").status_code == 401
+
+    def test_off_bearer_returns_no_tokens(self, user_store):
+        local_client = _register_client(user_store, issue_session=False)
+        resp = local_client.post(
+            "/api/auth/register", json=_NEW_USER, headers={"X-Auth-Strategy": "bearer"}
+        )
+        assert resp.status_code == 201
+        assert set(resp.json()) == {"success", "userId"}
+        assert "set-cookie" not in resp.headers
+
+    def test_on_cookie_mode_sets_cookies_and_me_answers(self, user_store):
+        local_client = _register_client(user_store, issue_session=True)
+        resp = local_client.post("/api/auth/register", json=_NEW_USER)
+        assert resp.status_code == 201
+        data = resp.json()
+        assert set(data) == {"success", "userId"}
+        assert data["success"] is True
+        assert "access-token" in resp.cookies
+        assert "refresh-token" in resp.cookies
+        sessions = _run(user_store.get_sessions_for_user(data["userId"]))
+        assert len(sessions) == 1
+        assert sessions[0].refresh_token_hash
+
+        me_resp = local_client.get("/api/auth/me")
+        assert me_resp.status_code == 200
+        assert me_resp.json()["email"] == "carol@example.com"
+        assert me_resp.json()["sub"] == data["userId"]
+
+    def test_on_bearer_mode_returns_tokens_and_me_answers(self, user_store):
+        local_client = _register_client(user_store, issue_session=True)
+        resp = local_client.post(
+            "/api/auth/register", json=_NEW_USER, headers={"X-Auth-Strategy": "bearer"}
+        )
+        assert resp.status_code == 201
+        data = resp.json()
+        assert set(data) == {"success", "userId", "accessToken", "refreshToken"}
+        assert "set-cookie" not in resp.headers
+        assert len(_run(user_store.get_sessions_for_user(data["userId"]))) == 1
+        refresh_payload = decode_token(data["refreshToken"], SECRET)
+        assert refresh_payload["sub"] == data["userId"]
+
+        me_resp = local_client.get(
+            "/api/auth/me", headers={"Authorization": f"Bearer {data['accessToken']}"}
+        )
+        assert me_resp.status_code == 200
+        assert me_resp.json()["sub"] == data["userId"]
+
+    def test_on_publishes_login_success_after_user_created(self, user_store):
+        from awesome_python_auth.events import AuthEventBus, AuthEventNames
+
+        bus = AuthEventBus()
+        names: list[str] = []
+        bus.on_event("*", lambda p: names.append(p["event"]))
+        local_client = _register_client(user_store, issue_session=True, event_bus=bus)
+        resp = local_client.post("/api/auth/register", json=_NEW_USER)
+        assert resp.status_code == 201
+        assert names == [AuthEventNames.USER_CREATED, AuthEventNames.AUTH_LOGIN_SUCCESS]
+
+    def test_on_duplicate_email_issues_nothing(self, user_store, registered_user):
+        local_client = _register_client(user_store, issue_session=True)
+        resp = local_client.post(
+            "/api/auth/register",
+            json={"email": "alice@example.com", "password": "Pass1234!"},
+            headers={"X-Auth-Strategy": "bearer"},
+        )
+        assert resp.status_code == 409
+        assert "accessToken" not in resp.text
+        assert "set-cookie" not in resp.headers
+        assert _run(user_store.get_sessions_for_user(registered_user.id)) == []
+
+    def test_on_invalid_body_issues_nothing(self, user_store):
+        local_client = _register_client(user_store, issue_session=True)
+        resp = local_client.post("/api/auth/register", json={"email": "dave@example.com"})
+        assert resp.status_code == 422
+        assert "set-cookie" not in resp.headers
+        assert _run(user_store.list_all_sessions()) == []
+
+    def test_on_refusing_hook_issues_nothing(self, user_store):
+        from fastapi import HTTPException
+
+        async def refuse(user):
+            raise HTTPException(status_code=400, detail="Registration closed")
+
+        local_client = _register_client(user_store, issue_session=True, on_register=refuse)
+        resp = local_client.post("/api/auth/register", json=_NEW_USER)
+        assert resp.status_code == 400
+        assert "set-cookie" not in resp.headers
+        assert _run(user_store.list_all_sessions()) == []
+        assert _run(user_store.get_by_email("carol@example.com")) is None
+
+
+# ---------------------------------------------------------------------------
 # Login
 # ---------------------------------------------------------------------------
 
