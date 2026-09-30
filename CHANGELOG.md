@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- `AuthConfig.issue_session_on_register` (default `False`): when `True`, a successful
+  `POST /register` also opens a session for the new account, delivered as `POST /login`
+  delivers it — auth cookies in cookie mode, `accessToken` / `refreshToken` in the body
+  in bearer mode — with a stored session row and the `identity.auth.login.success`
+  event. Refused registrations issue nothing. With the option off (the default)
+  register answers `201 {"success": true, "userId": ...}` as before. Family spec from
+  awesome-go-auth #21.
+
 ## [1.1.0] - 2026-05-06
 
 ### Added

@@ -92,6 +92,7 @@ config = AuthConfig(
     cookie_prefix="__Host-",        # Optional cookie name prefix (__Host- / __Secure-)
     totp_issuer="My App",           # Shown in authenticator apps
     session_check_on="refresh",     # Stateful-session revocation checks: allcalls|refresh|none
+    issue_session_on_register=False,# True: POST /register also logs the new account in (default False)
     ui_config={"theme": "dark"},    # Static UI config returned by GET /ui/config
 )
 ```
@@ -165,7 +166,7 @@ All endpoints are mounted under `api_prefix` (default: `/api/auth`).
 |---|---|---|
 | `GET` | `/me` | Return the current authenticated user |
 | `POST` | `/login` | Login with email + password |
-| `POST` | `/register` | Create a new account |
+| `POST` | `/register` | Create a new account (opens a session too when `issue_session_on_register=True`) |
 | `POST` | `/logout` | Logout and clear cookies |
 | `POST` | `/refresh` | Refresh the access token |
 | `PATCH` | `/profile` | Update first/last name |
@@ -272,6 +273,26 @@ async def my_on_register(user: StoredUser) -> StoredUser:
 
 app.include_router(configurator.router(on_register=my_on_register))
 ```
+
+### Opening a session on register
+
+By default `POST /register` answers `201 {"success": true, "userId": "..."}` and
+issues nothing — the client calls `POST /login` next (the `awesome-node-auth`
+reference behaviour). Set `AuthConfig(issue_session_on_register=True)` to have a
+successful registration log the new account in, delivered exactly as `POST /login`
+delivers it:
+
+- cookie mode: the access and refresh cookies are set; the body stays
+  `{"success": true, "userId": "..."}`;
+- bearer mode (`X-Auth-Strategy: bearer`): no cookies; the body adds
+  `accessToken` and `refreshToken`.
+
+A session row is stored and `identity.auth.login.success` is published, as for a
+login. A refused registration (`409`, `422`, an `on_register` hook that raises)
+issues nothing. This backend has no email-verification policy that blocks login,
+so the option does not interact with verification; if a custom `on_register` hook
+enables TOTP on the new account, no session is issued (login would answer with a
+2FA challenge).
 
 ---
 

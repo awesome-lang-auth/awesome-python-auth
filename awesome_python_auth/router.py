@@ -427,22 +427,16 @@ class AuthConfigurator:
         def _is_bearer(request: Request) -> bool:
             return request.headers.get("x-auth-strategy", "").lower() == "bearer"
 
-        def _send_tokens(
+        def _deliver_tokens(
             request: Request,
             response: Response,
             access_token: str,
             refresh_token: str,
-            user: StoredUser,
         ) -> dict[str, Any]:
-            """Set cookies (web) or return tokens in body (native)."""
-            auth_user = user.to_auth_user()
+            """Deliver a session: bearer mode returns the token fields for the
+            body; cookie mode sets the auth cookies and returns nothing to add."""
             if _is_bearer(request):
-                return {
-                    "success": True,
-                    "accessToken": access_token,
-                    "refreshToken": refresh_token,
-                    **auth_user.to_api_dict(),
-                }
+                return {"accessToken": access_token, "refreshToken": refresh_token}
             _set_auth_cookies(
                 response,
                 access_token,
@@ -455,7 +449,41 @@ class AuthConfigurator:
                 access_cookie_name=access_cookie_name,
                 refresh_cookie_name=refresh_cookie_name,
             )
-            return {"success": True, **auth_user.to_api_dict()}
+            return {}
+
+        def _send_tokens(
+            request: Request,
+            response: Response,
+            access_token: str,
+            refresh_token: str,
+            user: StoredUser,
+        ) -> dict[str, Any]:
+            """Set cookies (web) or return tokens in body (native)."""
+            return {
+                "success": True,
+                **_deliver_tokens(request, response, access_token, refresh_token),
+                **user.to_auth_user().to_api_dict(),
+            }
+
+        async def _open_password_session(
+            stored: StoredUser, request: Request
+        ) -> tuple[str, str]:
+            """Open a session after a successful password authentication, as
+            ``POST /login`` does: session row, ``last_login``, login event."""
+            access_token, refresh_token, session = await _create_session(stored, request)
+            stored.last_login = datetime.now(timezone.utc)
+            await store.update(stored)
+            _emit(
+                AuthEventNames.AUTH_LOGIN_SUCCESS,
+                {
+                    "userId": stored.id,
+                    "tenantId": getattr(stored, "tenant_id", None),
+                    "sessionId": session.handle if session else None,
+                    "data": {"method": "password"},
+                },
+                request,
+            )
+            return access_token, refresh_token
 
         # ── /me ─────────────────────────────────────────────────────────────
 
@@ -491,25 +519,13 @@ class AuthConfigurator:
                     "available2faMethods": ["totp"],
                 }
 
-            access_token, refresh_token, session = await _create_session(stored, request)
-            stored.last_login = datetime.now(timezone.utc)
-            await store.update(stored)
-            _emit(
-                AuthEventNames.AUTH_LOGIN_SUCCESS,
-                {
-                    "userId": stored.id,
-                    "tenantId": getattr(stored, "tenant_id", None),
-                    "sessionId": session.handle if session else None,
-                    "data": {"method": "password"},
-                },
-                request,
-            )
+            access_token, refresh_token = await _open_password_session(stored, request)
             return _send_tokens(request, response, access_token, refresh_token, stored)
 
         # ── /register ────────────────────────────────────────────────────────
 
         @router.post("/register", status_code=201)
-        async def register(body: RegisterBody, request: Request) -> dict:
+        async def register(body: RegisterBody, request: Request, response: Response) -> dict:
             existing = await store.get_by_email(body.email)
             if existing:
                 raise HTTPException(status_code=409, detail="Email already registered")
@@ -544,7 +560,15 @@ class AuthConfigurator:
                 request,
             )
 
-            return {"success": True, "userId": new_user.id}
+            result: dict[str, Any] = {"success": True, "userId": new_user.id}
+            # Optional: open a session as /login would.  Reached only when the
+            # registration succeeded (every refusal raised above).  An account
+            # that already carries a second factor (set by a custom hook) gets
+            # no session here: /login would answer with a 2FA challenge.
+            if getattr(cfg, "issue_session_on_register", False) and not new_user.is_totp_enabled:
+                access_token, refresh_token = await _open_password_session(new_user, request)
+                result.update(_deliver_tokens(request, response, access_token, refresh_token))
+            return result
 
         # ── /logout ──────────────────────────────────────────────────────────
 

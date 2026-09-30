@@ -42,6 +42,15 @@ class AuthConfig:
     email:
         Optional email configuration dict.  Keys depend on the provider.
         Pass ``{"enabled": True}`` to signal that email sending is active.
+    issue_session_on_register:
+        When ``True``, a successful ``POST /register`` also opens a session for
+        the new account, delivered exactly as ``POST /login`` delivers it:
+        access/refresh cookies in cookie mode, ``accessToken`` /
+        ``refreshToken`` in the body with ``X-Auth-Strategy: bearer``, and a
+        stored session row.  A refused registration never issues anything.
+        Default: ``False`` (the awesome-node-auth reference behaviour: register
+        answers ``201 {"success": true, "userId": ...}`` and the client logs in
+        afterwards).
 
     Hooks
     -----
@@ -124,6 +133,11 @@ class AuthConfig:
     totp_issuer: str | None = None
     ui_config: dict[str, Any] | None = None
     email: dict[str, Any] | None = None
+
+    # ── Registration ─────────────────────────────────────────────────────────
+    # When True, POST /register also opens a session (cookies or bearer tokens,
+    # as POST /login does).  Default False — the reference behaviour.
+    issue_session_on_register: bool = False
 
     # ── Mailer ───────────────────────────────────────────────────────────────
     # Optional: provide a MailerConfig to enable built-in email sending.
