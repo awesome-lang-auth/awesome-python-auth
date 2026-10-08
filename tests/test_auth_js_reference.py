@@ -32,13 +32,17 @@ AUTH_JS_REFERENCE_SIZE = 31277
 AUTH_JS = Path(__file__).resolve().parent.parent / "awesome_python_auth" / "ui_assets" / "auth.js"
 
 
-def _served_auth_js(api_prefix: str | None = None) -> bytes:
+def _served_auth_js(api_prefix: str | None = None, *, pages: bool = True) -> bytes:
+    """auth.js as served by the auth router alone (``pages=False``) or by the
+    UI mounted with ``mount_ui``."""
     config = AuthConfig(access_token_secret="x" * 32)
     if api_prefix is not None:
         config = AuthConfig(access_token_secret="x" * 32, api_prefix=api_prefix)
     app = FastAPI()
     app.include_router(AuthConfigurator(config, InMemoryUserStore()).router())
-    path = mount_ui(app, config)
+    path = f"{config.api_prefix}/ui"
+    if pages:
+        assert mount_ui(app, config) == path
     resp = TestClient(app).get(f"{path}/auth.js")
     assert resp.status_code == 200
     assert "javascript" in resp.headers["content-type"]
@@ -55,22 +59,25 @@ class TestBundledAuthJs:
         # The line the 1.x copy was missing.
         assert AUTH_JS.read_bytes().startswith(b"/**\n * Universal Authentication Service")
 
-    def test_served_bytes_are_the_reference(self):
-        body = _served_auth_js()
+    @pytest.mark.parametrize("pages", [False, True], ids=["router-only", "with-pages"])
+    def test_served_bytes_are_the_reference(self, pages):
+        body = _served_auth_js(pages=pages)
         assert hashlib.sha256(body).hexdigest() == AUTH_JS_REFERENCE_SHA256
 
-    def test_served_bytes_are_the_reference_under_a_custom_prefix(self):
-        body = _served_auth_js("/api/auth")
+    @pytest.mark.parametrize("pages", [False, True], ids=["router-only", "with-pages"])
+    def test_served_bytes_are_the_reference_under_a_custom_prefix(self, pages):
+        body = _served_auth_js("/api/auth", pages=pages)
         assert hashlib.sha256(body).hexdigest() == AUTH_JS_REFERENCE_SHA256
 
-    def test_served_file_is_valid_javascript(self, tmp_path):
+    @pytest.mark.parametrize("pages", [False, True], ids=["router-only", "with-pages"])
+    def test_served_file_is_valid_javascript(self, tmp_path, pages):
         # CI sets AUTH_JS_REQUIRE_NODE=1 so this check cannot be skipped there.
         if shutil.which("node") is None:
             if os.environ.get("AUTH_JS_REQUIRE_NODE"):
                 pytest.fail("AUTH_JS_REQUIRE_NODE is set but node is not installed")
             pytest.skip("node is not installed")
         script = tmp_path / "auth.js"
-        script.write_bytes(_served_auth_js())
+        script.write_bytes(_served_auth_js(pages=pages))
         result = subprocess.run(
             ["node", "--check", str(script)], capture_output=True, text=True, timeout=60
         )

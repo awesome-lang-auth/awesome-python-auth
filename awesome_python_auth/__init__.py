@@ -13,8 +13,8 @@ Usage::
         access_token_secret="your-secret",  # api_prefix defaults to "/auth"
     )
     configurator = AuthConfigurator(config, user_store)
-    app.include_router(configurator.router())  # /auth/login, /auth/me, ...
-    mount_ui(app, config)                      # /auth/ui/login, /auth/ui/auth.js
+    app.include_router(configurator.router())  # /auth/login, /auth/me, /auth/ui/auth.js, ...
+    mount_ui(app, config)                      # optional pages: /auth/ui/login, ...
 """
 
 from .config import DEFAULT_API_PREFIX, AuthConfig, AuthConfigurator

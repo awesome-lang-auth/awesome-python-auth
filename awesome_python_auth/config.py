@@ -46,7 +46,10 @@ class AuthConfig:
     totp_issuer:
         Issuer name shown in authenticator apps.  Default: ``"awesome-python-auth"``.
     ui_config:
-        Static UI configuration returned by ``GET <api_prefix>/ui/config``.
+        UI features and theme for the browser runtime, as
+        ``{"features": {...}, "ui": {...}}``.  ``GET <api_prefix>/ui/config``
+        and the built-in pages report them in awesome-node-auth's shape
+        (``apiPrefix``, ``features``, ``ui``, ``headless``).
     email:
         Optional email configuration dict.  Keys depend on the provider.
         Pass ``{"enabled": True}`` to signal that email sending is active.

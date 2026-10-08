@@ -44,7 +44,8 @@ DELETE /linked-accounts/{provider}/{provider_account_id}
 GET  /oauth/{provider}
 GET  /oauth/{provider}/callback
 
-GET  /ui/config
+GET  /ui/auth.js   (the awesome-node-auth browser runtime)
+GET  /ui/config    (its configuration; headless unless the UI pages are mounted)
 GET  /tools/stream (SSE)
 """
 
@@ -104,6 +105,7 @@ from .models import (
     Verify2faSetupBody,
 )
 from .password_utils import hash_password, verify_password
+from .ui_router import _add_runtime_routes
 
 # ── Cookie / header names ────────────────────────────────────────────────────
 _BASE_ACCESS_TOKEN_COOKIE = "access-token"
@@ -266,14 +268,20 @@ class AuthConfigurator:
     ) -> APIRouter:
         """Return a configured :class:`fastapi.APIRouter`.
 
-        Every route sits under ``AuthConfig.api_prefix`` (default ``"/auth"``).
-        The built-in UI is mounted separately, after this router is included,
-        with :func:`~awesome_python_auth.ui_router.mount_ui`.
+        Every route sits under ``AuthConfig.api_prefix`` (default ``"/auth"``),
+        the browser runtime included: ``GET <api_prefix>/ui/auth.js`` (the
+        awesome-node-auth ``auth.js``, byte for byte) and
+        ``GET <api_prefix>/ui/config`` answer as soon as this router is
+        included.  The built-in UI pages are optional and mounted separately
+        with :func:`~awesome_python_auth.ui_router.mount_ui`; until then
+        ``/ui/config`` reports ``headless: true`` and ``/ui/login`` is 404.
 
         Parameters
         ----------
         settings_store:
-            Optional settings store for UI configuration.
+            Optional settings store for UI configuration: a dict stored under
+            ``"ui_config"`` replaces ``AuthConfig.ui_config`` in
+            ``GET <api_prefix>/ui/config``.
         on_register:
             Optional async callable ``(data: StoredUser) -> StoredUser`` called
             just before a new user is persisted.  Use it to add custom logic
@@ -1276,15 +1284,13 @@ class AuthConfigurator:
             )
             return redirect
 
-        # ── /ui/config ───────────────────────────────────────────────────────
+        # ── /ui/auth.js and /ui/config ───────────────────────────────────────
+        # Served whenever this router is mounted; a UI mounted at
+        # <api_prefix>/ui (mount_ui) serves them itself instead.
 
-        @router.get("/ui/config")
-        async def ui_config() -> dict:
-            if settings_store:
-                config_data = await settings_store.get("ui_config")
-                if config_data:
-                    return config_data
-            return cfg.ui_config or {}
+        _add_runtime_routes(
+            router, cfg, settings_store=settings_store, on_register=on_register
+        )
 
         # ── /tools/stream (SSE) ──────────────────────────────────────────────
         # If cfg.tools is set and has an SseManager, use it; otherwise keep a

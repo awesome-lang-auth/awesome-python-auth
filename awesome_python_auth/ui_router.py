@@ -7,24 +7,27 @@ forgot-password, reset-password, verify-email, magic-link, 2fa) with
 Server-Side Rendering (SSR) of the UI configuration, branding colours, and
 the ``window.__AUTH_CONFIG__`` bootstrap script.
 
-The UI lives under ``<api_prefix>/ui``, as on every awesome-lang-auth backend:
-with the default prefix the pages are at ``/auth/ui/login`` and the runtime
-script at ``/auth/ui/auth.js``.  ``auth.js`` derives the API prefix from the
-page URL (everything before ``/ui/``), so the UI has to sit under the prefix
-of the auth router it talks to.  :func:`mount_ui` mounts it there::
+Everything lives under ``<api_prefix>/ui``, as on every awesome-lang-auth
+backend.  The auth router (``AuthConfigurator.router()``) always serves the
+runtime script ``<api_prefix>/ui/auth.js`` and ``<api_prefix>/ui/config``, so
+with the default prefix ``/auth/ui/auth.js`` answers as soon as the router is
+included.  The pages are optional: :func:`mount_ui` mounts them under the same
+path (``/auth/ui/login``)::
 
     from awesome_python_auth import AuthConfigurator, mount_ui
 
     app.include_router(AuthConfigurator(auth_config, user_store).router())
-    mount_ui(app, auth_config)  # -> <api_prefix>/ui, /auth/ui by default
+    mount_ui(app, auth_config)  # pages under <api_prefix>/ui, /auth/ui by default
 
 Or with a custom assets directory::
 
     mount_ui(app, auth_config, ui_assets_dir="/path/to/custom/ui")
 
-Include the auth router **before** mounting the UI: the auth router owns
-``GET <api_prefix>/ui/config`` and FastAPI matches routes in the order they
-were added.
+An app mounted at ``<api_prefix>/ui`` (by :func:`mount_ui`, or by hand with
+:func:`build_ui_router`) owns that path: it serves its own ``auth.js`` and
+``/config``, and the auth router's two routes step aside, whichever was added
+first.  ``auth.js`` derives the API prefix from the page URL (everything before
+``/ui/``), so the UI has to sit under the prefix of the auth router it talks to.
 """
 
 from __future__ import annotations
@@ -35,14 +38,26 @@ import re
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, Request, Response
+from fastapi import APIRouter, FastAPI, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.routing import APIRoute
 from fastapi.staticfiles import StaticFiles
+from starlette.routing import Match, Mount
+from starlette.types import Scope
 
 from .config import DEFAULT_API_PREFIX
 
+try:  # Starlette >= 0.33: the path routes match against, without root_path.
+    from starlette._utils import get_route_path as _get_route_path
+except ImportError:  # pragma: no cover - older Starlette than FastAPI 0.115 allows
+    def _get_route_path(scope: Scope) -> str:
+        return scope["path"]
+
 # Directory bundled with the package
 _BUNDLED_ASSETS = Path(__file__).parent / "ui_assets"
+# The awesome-node-auth browser runtime, vendored byte for byte.
+_BUNDLED_AUTH_JS = _BUNDLED_ASSETS / "auth.js"
+_AUTH_JS_MEDIA_TYPE = "text/javascript"
 
 
 def build_ui_router(
@@ -51,11 +66,14 @@ def build_ui_router(
     api_prefix: str | None = None,
     ui_assets_dir: str | Path | None = None,
     headless: bool = False,
+    settings_store: Any = None,  # SettingsStore | None
 ) -> FastAPI:
     """Build a mini FastAPI application that serves the auth UI.
 
     Mount it at ``ui_mount_path(api_prefix)`` (or let :func:`mount_ui` do it)
-    so ``auth.js`` finds the API from the page URL.
+    so ``auth.js`` finds the API from the page URL.  Mounted there, it takes
+    over ``<api_prefix>/ui/auth.js`` and ``<api_prefix>/ui/config`` from the
+    auth router.
 
     Parameters
     ----------
@@ -65,11 +83,16 @@ def build_ui_router(
         Override the API prefix (defaults to ``config.api_prefix``).
     ui_assets_dir:
         Path to a custom directory of HTML/CSS/JS assets.  Defaults to the
-        bundled ``ui_assets/`` directory shipped with the package.
+        bundled ``ui_assets/`` directory shipped with the package.  If it has
+        no ``auth.js``, the bundled one is served.
     headless:
         When ``True``, only the ``/config`` endpoint and static JS/CSS assets
         are served — the HTML pages are not rendered.  Use this when your SPA
         provides its own login UI.
+    settings_store:
+        Optional :class:`~awesome_python_auth.models.SettingsStore`.  A dict
+        stored under the ``"ui_config"`` key replaces ``config.ui_config`` in
+        ``/config`` and in the pages, as on the auth router.
     """
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 
@@ -80,7 +103,21 @@ def build_ui_router(
 
     @app.get("/config")
     async def ui_config(request: Request) -> dict:
-        return _build_config(config, resolved_api_prefix, headless=headless)
+        return _build_config(
+            config,
+            resolved_api_prefix,
+            headless=headless,
+            ui_cfg=await _stored_ui_config(settings_store),
+        )
+
+    # ── /auth.js: the custom one if the assets directory has it ──────────────
+
+    custom_auth_js = assets_path / "auth.js"
+    served_auth_js = custom_auth_js if custom_auth_js.is_file() else _BUNDLED_AUTH_JS
+
+    @app.get("/auth.js")
+    async def auth_js() -> FileResponse:
+        return FileResponse(str(served_auth_js), media_type=_AUTH_JS_MEDIA_TYPE)
 
     if headless:
         # Headless: only serve static assets (auth.js, base.css)
@@ -135,7 +172,12 @@ def build_ui_router(
             html_file = assets_path / "login.html"
         if not html_file.exists():
             return Response(status_code=404)
-        return _render_ssr(html_file, config, resolved_api_prefix)
+        return _render_ssr(
+            html_file,
+            config,
+            resolved_api_prefix,
+            ui_cfg=await _stored_ui_config(settings_store),
+        )
 
     _mount_static(app, assets_path)
     return app
@@ -156,17 +198,17 @@ def mount_ui(
     *,
     ui_assets_dir: str | Path | None = None,
     headless: bool = False,
+    settings_store: Any = None,  # SettingsStore | None
     name: str = "auth_ui",
 ) -> str:
-    """Mount the built-in UI under ``<config.api_prefix>/ui`` and return that path.
+    """Mount the built-in UI pages under ``<config.api_prefix>/ui`` and return that path.
 
-    With the default prefix the login page is ``/auth/ui/login`` and the
-    runtime script is ``/auth/ui/auth.js``; with ``api_prefix="/api/auth"``
-    they move to ``/api/auth/ui/login`` and ``/api/auth/ui/auth.js``.
-
-    Call it after ``app.include_router(configurator.router())``: the auth router
-    serves ``GET <api_prefix>/ui/config`` and routes match in the order they were
-    added, so mounting the UI first would shadow that endpoint.
+    With the default prefix the login page is ``/auth/ui/login``; with
+    ``api_prefix="/api/auth"`` it moves to ``/api/auth/ui/login``.  The auth
+    router serves ``auth.js`` and ``/config`` there without this call; once
+    the UI is mounted it serves them itself (``headless: false`` in
+    ``/config``), whether this call comes before or after
+    ``app.include_router(configurator.router())``.
 
     Parameters
     ----------
@@ -175,18 +217,97 @@ def mount_ui(
     config:
         The :class:`~awesome_python_auth.config.AuthConfig` instance whose
         ``api_prefix`` the auth router uses.
-    ui_assets_dir, headless:
-        Passed to :func:`build_ui_router`.
+    ui_assets_dir, headless, settings_store:
+        Passed to :func:`build_ui_router`.  Pass the same ``settings_store``
+        as to ``router()`` so ``/config`` keeps reading it.
     name:
         Route name of the mount.  Default: ``"auth_ui"``.
     """
     path = ui_mount_path(getattr(config, "api_prefix", DEFAULT_API_PREFIX))
     app.mount(
         path,
-        build_ui_router(config=config, ui_assets_dir=ui_assets_dir, headless=headless),
+        build_ui_router(
+            config=config,
+            ui_assets_dir=ui_assets_dir,
+            headless=headless,
+            settings_store=settings_store,
+        ),
         name=name,
     )
     return path
+
+
+# ---------------------------------------------------------------------------
+# auth.js and /config on the auth router
+# ---------------------------------------------------------------------------
+
+
+class _UiRuntimeRoute(APIRoute):
+    """A route of the auth router under ``<api_prefix>/ui`` that steps aside
+    when an app is mounted at that ``/ui`` path.
+
+    The mounted UI (:func:`mount_ui`, or :func:`build_ui_router` mounted by
+    hand) then answers the request, so the auth router never shadows it,
+    whichever of the two was added to the application first.
+    """
+
+    def matches(self, scope: Scope) -> tuple[Match, Scope]:
+        match, child_scope = super().matches(scope)
+        if match is not Match.NONE and _ui_app_mounted(scope):
+            return Match.NONE, {}
+        return match, child_scope
+
+
+def _ui_app_mounted(scope: Scope) -> bool:
+    """Whether the application has a mount at the parent path of the request
+    (``/auth/ui`` for ``/auth/ui/auth.js``)."""
+    ui_path = _get_route_path(scope).rsplit("/", 1)[0]
+    routes = getattr(scope.get("app"), "routes", None) or ()
+    return any(isinstance(route, Mount) and route.path == ui_path for route in routes)
+
+
+def _add_runtime_routes(
+    router: APIRouter,
+    config: Any,  # AuthConfig
+    *,
+    settings_store: Any = None,  # SettingsStore | None
+    on_register: Any = None,
+) -> None:
+    """Add ``GET /ui/auth.js`` and ``GET /ui/config`` to the auth *router*.
+
+    Called by ``AuthConfigurator.router()``: every awesome-lang-auth backend
+    serves the browser runtime at ``<api_prefix>/ui/auth.js`` as soon as its
+    auth router is mounted.  Without the pages ``/config`` reports
+    ``headless: true``, so ``auth.js`` does not send the browser to a login
+    page that is not there (awesome-node-auth's headless mode).
+    """
+    api_prefix: str = getattr(config, "api_prefix", DEFAULT_API_PREFIX)
+
+    async def ui_auth_js() -> FileResponse:
+        return FileResponse(str(_BUNDLED_AUTH_JS), media_type=_AUTH_JS_MEDIA_TYPE)
+
+    async def ui_config() -> dict:
+        return _build_config(
+            config,
+            api_prefix,
+            headless=True,
+            ui_cfg=await _stored_ui_config(settings_store),
+            on_register=on_register,
+        )
+
+    router.add_api_route(
+        "/ui/auth.js",
+        ui_auth_js,
+        methods=["GET"],
+        include_in_schema=False,
+        route_class_override=_UiRuntimeRoute,
+    )
+    router.add_api_route(
+        "/ui/config",
+        ui_config,
+        methods=["GET"],
+        route_class_override=_UiRuntimeRoute,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -194,11 +315,35 @@ def mount_ui(
 # ---------------------------------------------------------------------------
 
 
-def _build_config(config: Any, api_prefix: str, *, headless: bool = False) -> dict:
-    """Build the ``/config`` response payload."""
-    ui_cfg: dict = getattr(config, "ui_config", None) or {}
+async def _stored_ui_config(settings_store: Any) -> dict | None:
+    """The ``"ui_config"`` document of *settings_store*, if it holds one."""
+    if settings_store is None:
+        return None
+    stored = await settings_store.get("ui_config")
+    return stored if isinstance(stored, dict) and stored else None
+
+
+def _build_config(
+    config: Any,
+    api_prefix: str,
+    *,
+    headless: bool = False,
+    ui_cfg: dict | None = None,
+    on_register: Any = None,
+) -> dict:
+    """Build the ``/config`` response payload.
+
+    *ui_cfg* replaces ``config.ui_config`` (a settings-store document);
+    *on_register* is the auth router's hook, which enables ``register`` too.
+    """
+    if ui_cfg is None:
+        ui_cfg = getattr(config, "ui_config", None) or {}
     features = {
-        "register": bool(getattr(config, "on_register", None) or ui_cfg.get("features", {}).get("register")),
+        "register": bool(
+            on_register
+            or getattr(config, "on_register", None)
+            or ui_cfg.get("features", {}).get("register")
+        ),
         "magicLink": bool(
             getattr(config, "on_magic_link_send", None)
             or ui_cfg.get("features", {}).get("magicLink")
@@ -235,7 +380,9 @@ def _build_config(config: Any, api_prefix: str, *, headless: bool = False) -> di
     }
 
 
-def _render_ssr(html_file: Path, config: Any, api_prefix: str) -> HTMLResponse:
+def _render_ssr(
+    html_file: Path, config: Any, api_prefix: str, *, ui_cfg: dict | None = None
+) -> HTMLResponse:
     """Read an HTML file, inject SSR config, and return the response.
 
     ``html_file`` must already be validated to be within the assets directory
@@ -244,7 +391,7 @@ def _render_ssr(html_file: Path, config: Any, api_prefix: str) -> HTMLResponse:
     # Read from the already-validated, resolved path to avoid any ambiguity
     resolved = html_file.resolve()
     html = resolved.read_text(encoding="utf-8")
-    cfg = _build_config(config, api_prefix)
+    cfg = _build_config(config, api_prefix, ui_cfg=ui_cfg)
     ui_theme = cfg.get("ui", {})
 
     # Build inline CSS variables (prevents FOUC)
