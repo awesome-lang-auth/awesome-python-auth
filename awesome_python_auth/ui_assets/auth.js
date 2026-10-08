@@ -1,3 +1,4 @@
+/**
  * Universal Authentication Service & Utility Wrapper for Vanilla JS UI
  * Combines global fetch interception with the internal AuthService API used by the UI.
  * Extensible for single-page applications via AwesomeNodeAuth.init(options).

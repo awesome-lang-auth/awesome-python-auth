@@ -10,12 +10,12 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from awesome_python_auth import AuthConfig
-from awesome_python_auth.ui_router import build_ui_router
+from awesome_python_auth.ui_router import mount_ui
 
 
 def _app() -> FastAPI:
     app = FastAPI()
-    app.mount("/auth/ui", build_ui_router(config=AuthConfig(api_prefix="/api/auth")), name="auth_ui")
+    mount_ui(app, AuthConfig())  # default prefix: /auth -> /auth/ui
     return app
 
 
