@@ -375,10 +375,14 @@ class TestTwoFactor:
 
 
 class TestUiConfig:
-    def test_returns_empty_dict_by_default(self, client):
+    def test_returns_the_node_shaped_config_by_default(self, client):
+        # Not the raw (empty) AuthConfig.ui_config any more: the payload auth.js reads.
         resp = client.get("/api/auth/ui/config")
         assert resp.status_code == 200
-        assert resp.json() == {}
+        data = resp.json()
+        assert list(data) == ["apiPrefix", "features", "ui", "translations", "lang", "headless"]
+        assert data["apiPrefix"] == "/api/auth"
+        assert data["headless"] is False  # the configured flag, as on awesome-node-auth
 
 
 # ---------------------------------------------------------------------------

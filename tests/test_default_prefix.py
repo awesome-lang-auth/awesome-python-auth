@@ -99,7 +99,9 @@ class TestDefaults:
     def test_router_routes_are_under_auth(self):
         router = AuthConfigurator(AuthConfig(access_token_secret=SECRET), InMemoryUserStore()).router()
         paths = {route.path for route in router.routes}
-        assert {"/auth/login", "/auth/register", "/auth/me", "/auth/ui/config"} <= paths
+        assert {
+            "/auth/login", "/auth/register", "/auth/me", "/auth/ui/config", "/auth/ui/auth.js",
+        } <= paths
         assert not any(p.startswith("/api/auth") for p in paths)
 
 
@@ -126,13 +128,16 @@ class TestDefaultPrefixApp:
         assert _ssr_config(login.text)["apiPrefix"] == "/auth"
         assert _auth_js_api_prefix("/auth/ui/login") == config.api_prefix
 
-    def test_router_keeps_ui_config(self):
-        # The auth router is included before the UI is mounted, so it still
-        # answers GET <prefix>/ui/config with the 1.x payload.
-        app, _, _ = _app(ui_config={"theme": "dark"})
+    def test_ui_config_comes_from_the_mounted_ui(self):
+        # The UI mounted at /auth/ui answers GET /auth/ui/config: node-shaped,
+        # pages served (headless false), AuthConfig.ui_config applied.
+        app, _, _ = _app(ui_config={"ui": {"siteName": "Acme"}})
         resp = TestClient(app).get("/auth/ui/config")
         assert resp.status_code == 200
-        assert resp.json() == {"theme": "dark"}
+        data = resp.json()
+        assert data["apiPrefix"] == "/auth"
+        assert data["headless"] is False
+        assert data["ui"]["siteName"] == "Acme"
 
 
 class TestCustomPrefixApp:

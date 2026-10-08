@@ -31,7 +31,7 @@ Supports **both authentication strategies** used by those clients:
 | RBAC | ✅ Implemented | `RolesPermissionsStore` with token enrichment and role-based dependencies. |
 | Multi-tenancy | ✅ Implemented | `TenantStore` and tenant-aware models are available. |
 | Admin panel | ✅ Implemented | `build_admin_router(...)` serves the bundled admin SPA and APIs. |
-| Built-in UI + auth runtime (`auth.js`) | ✅ Implemented | `mount_ui(app, config)` serves the bundled pages and `auth.js` under `<api_prefix>/ui` (`/auth/ui/auth.js` by default), the same route as the other backends. |
+| Built-in UI + auth runtime (`auth.js`) | ✅ Implemented | The auth router serves `auth.js` and `/ui/config` at `<api_prefix>/ui` (`/auth/ui/auth.js` by default), the same route as the other backends; `mount_ui(app, config)` adds the optional bundled pages there. |
 | Client libraries compatibility (Angular + Flutter) | ✅ Implemented | Cookie+CSRF (web) and bearer (native) client strategies are both supported. |
 | Event-driven tooling (event bus, SSE, inbound/outbound webhooks, telemetry, notify channels) | ✅ Implemented | `AuthTools`, `AuthEventBus`, SSE, webhooks, telemetry, and `notify()` channels are available. |
 | API keys (M2M) | ✅ Implemented | `ApiKeyService`/`ApiKeyStore` plus auth/admin API-key endpoints are available. |
@@ -66,11 +66,12 @@ config = AuthConfig(
 # 2. Add CSRF middleware (required for Angular web clients)
 app.add_middleware(CsrfMiddleware)
 
-# 3. Mount the auth router: /auth/login, /auth/me, ...
+# 3. Mount the auth router: /auth/login, /auth/me, ... and the browser
+#    runtime /auth/ui/auth.js with its /auth/ui/config
 configurator = AuthConfigurator(config, user_store)
 app.include_router(configurator.router())
 
-# 4. Optional: the built-in UI, after the router: /auth/ui/login, /auth/ui/auth.js
+# 4. Optional: the built-in pages, /auth/ui/login, /auth/ui/register, ...
 mount_ui(app, config)
 ```
 
@@ -96,9 +97,13 @@ nothing warns. If you already pass `api_prefix="/api/auth"` to `AuthConfig` but 
 default it protects `/auth`, not your routes. To adopt `/auth`, remove `api_prefix`
 from both.
 
-Everything else follows `api_prefix`: the routes, the JWKS endpoint, and the
-built-in UI mounted with `mount_ui(app, config)` (then at `/api/auth/ui/login` and
-`/api/auth/ui/auth.js`). Payloads and cookies are unchanged. If you mounted
+Everything else follows `api_prefix`: the routes, the JWKS endpoint, `auth.js`
+and `/ui/config` (then `/api/auth/ui/auth.js` and `/api/auth/ui/config`), and the
+built-in pages mounted with `mount_ui(app, config)` (then `/api/auth/ui/login`).
+Payloads and cookies are unchanged, except `GET <api_prefix>/ui/config`, which now
+returns the awesome-node-auth document (`apiPrefix`, `features`, `ui`, `translations`,
+`lang`, `headless`) built from `AuthConfig.ui_config` instead of the raw dict, with
+`"Awesome Node Auth"` as the default `ui.siteName`. If you mounted
 `build_ui_router(...)` yourself at `/auth/ui` next to an API at `/api/auth`, switch
 to `mount_ui(app, config)`: `auth.js` derives the API prefix from the page URL, so
 the UI belongs under the API prefix.
@@ -121,7 +126,7 @@ config = AuthConfig(
     cookie_prefix="__Host-",        # Optional cookie name prefix (__Host- / __Secure-)
     totp_issuer="My App",           # Shown in authenticator apps
     session_check_on="refresh",     # Stateful-session revocation checks: allcalls|refresh|none
-    ui_config={"theme": "dark"},    # Static UI config returned by GET /ui/config
+    ui_config={"ui": {"siteName": "My App"}},  # UI features/theme reported by GET /ui/config
 )
 ```
 
@@ -255,40 +260,68 @@ All endpoints are mounted under `api_prefix` (default: `/auth`; it was `/api/aut
 ### Utilities
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/ui/config` | UI configuration (theme, branding) |
+| `GET` | `/ui/auth.js` | Browser runtime (awesome-node-auth `auth.js`) |
+| `GET` | `/ui/config` | Its configuration: `apiPrefix`, `features`, `ui` (theme, branding), `translations`, `lang`, `headless` |
 | `GET` | `/tools/stream` | Server-Sent Events stream |
 
 ---
 
 ## Built-in UI and `auth.js`
 
-`mount_ui(app, config)` serves the bundled login pages and the `auth.js` runtime
-under `<api_prefix>/ui`, the same route as every other awesome-lang-auth backend:
+Everything lives under `<api_prefix>/ui`, the same route as every other
+awesome-lang-auth backend. The auth router serves the `auth.js` runtime and its
+configuration as soon as it is included; the bundled pages are optional and
+`mount_ui(app, config)` adds them:
 
-| | Default (`api_prefix="/auth"`) | `api_prefix="/api/auth"` |
-|---|---|---|
-| Login page | `/auth/ui/login` | `/api/auth/ui/login` |
-| Runtime script | `/auth/ui/auth.js` | `/api/auth/ui/auth.js` |
+| | Default (`api_prefix="/auth"`) | `api_prefix="/api/auth"` | Served by |
+|---|---|---|---|
+| Runtime script | `/auth/ui/auth.js` | `/api/auth/ui/auth.js` | `configurator.router()` |
+| Runtime config | `/auth/ui/config` | `/api/auth/ui/config` | `configurator.router()` |
+| Login page (and the other pages) | `/auth/ui/login` | `/api/auth/ui/login` | `mount_ui(app, config)` only |
 
 ```python
 from awesome_python_auth import mount_ui
 
-app.include_router(configurator.router())  # first: it owns <api_prefix>/ui/config
-mount_ui(app, config)                      # then the UI, under <api_prefix>/ui
+app.include_router(configurator.router())  # /auth/ui/auth.js and /auth/ui/config
+mount_ui(app, config)                      # optional: /auth/ui/login, ...
 ```
+
+Without `mount_ui` the pages answer 404 and `auth.js` answers 200.
+`GET <api_prefix>/ui/config` returns the awesome-node-auth document (`apiPrefix`,
+`features`, `ui`, `translations`, `lang`, `headless`; byte for byte node's with the
+defaults) built from `AuthConfig.ui_config`, or from the `"ui_config"` entry of the
+`settings_store` passed to `router()` when it holds one. `lang` is the `?lang=`
+parameter, else `AuthConfig.mailer.default_lang`, else `"en"`. Its `headless` is
+`ui_config["headless"]`, `false` unless you set it, as on awesome-node-auth
+(`ui.headless`). When your SPA has its own login pages, set
+`ui_config={"headless": True}`, or pass `headless: true` (or a `loginUrl`) to
+`AwesomeNodeAuth.init()`: otherwise `auth.js` redirects to `<api_prefix>/ui/login`
+when the session expires.
+
+Its `apiPrefix` is the prefix the request came through, as awesome-node-auth takes
+it from `req.baseUrl`: `/v1/auth` under `app.include_router(router, prefix="/v1")`,
+`/api/auth` when the router sits in a sub-application mounted at `/api`, and
+`/svc/auth` behind `uvicorn --root-path /svc`. `auth.js` uses that value for its
+API calls once it has fetched `/ui/config`.
+
+The built-in UI app (`mount_ui`, or `build_ui_router(...)` mounted by hand) at
+`<api_prefix>/ui` serves everything under that path, `auth.js` and `/config`
+included, whether it is added before or after the router; its `/config` reports
+its own `headless` switch (`false` for `mount_ui(app, config)`, which serves the
+pages). Pass it the same `settings_store` as `router()` so `/ui/config` keeps
+reading it; it reads `features.register` from `AuthConfig.on_register` or
+`ui_config`, not from `router(on_register=...)`. Pass `ui_assets_dir=` for custom
+pages (without an `auth.js` there, the bundled one is served), or `headless=True`
+to serve the static assets without the pages. Any other app you mount at
+`<api_prefix>/ui`, such as `StaticFiles`, keeps its own files, and the router still
+answers `auth.js` and `/config` when it is included first. `ui_mount_path(prefix)`
+returns the mount path.
 
 `auth.js` is the awesome-node-auth runtime, shipped byte for byte. It derives the
 API prefix from the page URL (everything before `/ui/`) and falls back to `/auth`
 on any other page, so with the default prefix an SPA that loads
 `<script src="/auth/ui/auth.js"></script>` needs no configuration. With a custom
 prefix, pages outside the UI call `AwesomeNodeAuth.init({ apiPrefix: '/api/auth' })`.
-Pass `ui_assets_dir=` for custom pages, or `headless=True` when your SPA has its
-own login pages (the static assets, `auth.js` included, are still served).
-`GET <api_prefix>/ui/config` is answered by the auth router with
-`AuthConfig.ui_config`, which reports `headless` only if you put it there, so in
-headless mode the SPA calls `AwesomeNodeAuth.init({ headless: true })` itself.
-`build_ui_router(...)` and `ui_mount_path(prefix)` remain available to mount the
-UI by hand.
 
 ---
 
@@ -605,8 +638,8 @@ app.add_middleware(
 app.add_middleware(CsrfMiddleware, api_prefix="/auth", cookie_secure=False)
 
 configurator = AuthConfigurator(config, user_store)
-app.include_router(configurator.router())
-mount_ui(app, config)  # /auth/ui/login, /auth/ui/auth.js
+app.include_router(configurator.router())  # also /auth/ui/auth.js, /auth/ui/config
+mount_ui(app, config)  # optional pages: /auth/ui/login, ...
 
 @app.get("/api/todos")
 async def todos(user: AuthUser = Depends(require_auth)):
