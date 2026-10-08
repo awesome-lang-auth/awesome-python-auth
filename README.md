@@ -285,16 +285,20 @@ app.include_router(configurator.router())  # /auth/ui/auth.js and /auth/ui/confi
 mount_ui(app, config)                      # optional: /auth/ui/login, ...
 ```
 
-Without `mount_ui` the pages answer 404, `auth.js` answers 200 and
-`GET <api_prefix>/ui/config` reports `headless: true`, so `auth.js` does not send
-the browser to a login page that is not there (awesome-node-auth's headless mode).
-`/ui/config` returns the awesome-node-auth document (`apiPrefix`, `features`, `ui`,
-`headless`) built from `AuthConfig.ui_config`, or from the `"ui_config"` entry of
-the `settings_store` passed to `router()` when it holds one.
+Without `mount_ui` the pages answer 404 and `auth.js` answers 200.
+`GET <api_prefix>/ui/config` returns the awesome-node-auth document (`apiPrefix`,
+`features`, `ui`, `headless`) built from `AuthConfig.ui_config`, or from the
+`"ui_config"` entry of the `settings_store` passed to `router()` when it holds one.
+Its `headless` is `ui_config["headless"]`, `false` unless you set it, as on
+awesome-node-auth (`ui.headless`). When your SPA has its own login pages, set
+`ui_config={"headless": True}`, or pass `headless: true` (or a `loginUrl`) to
+`AwesomeNodeAuth.init()`: otherwise `auth.js` redirects to `<api_prefix>/ui/login`
+when the session expires.
 
 An app mounted at `<api_prefix>/ui` serves everything under that path, `auth.js`
-and `/config` included, whether it is added before or after the router:
-`mount_ui(app, config)` then reports `headless: false`. Pass it the same
+and `/config` included, whether it is added before or after the router; its
+`/config` reports its own `headless` switch (`false` for `mount_ui(app, config)`,
+which serves the pages). Pass it the same
 `settings_store` as `router()` so `/ui/config` keeps reading it. Pass
 `ui_assets_dir=` for custom pages (without an `auth.js` there, the bundled one is
 served), or `headless=True` to serve the static assets without the pages.

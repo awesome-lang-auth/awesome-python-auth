@@ -4,9 +4,10 @@ Every awesome-lang-auth backend serves the browser runtime at
 ``<prefix>/ui/auth.js`` (``/auth/ui/auth.js`` by default), next to a
 node-shaped ``<prefix>/ui/config``, as soon as its auth router is mounted.  The
 built-in pages are optional (``mount_ui``): without them ``/ui/login`` is 404
-while ``auth.js`` is 200 and ``/ui/config`` reports ``headless: true``, as in
-awesome-node-auth's headless mode.  A UI mounted at ``<prefix>/ui`` serves all
-of ``<prefix>/ui`` itself, whatever the order it and the router were added in.
+while ``auth.js`` is 200.  ``/ui/config`` reports the configured
+``ui_config["headless"]`` (``false`` unless set), as awesome-node-auth reports
+``ui.headless``.  A UI mounted at ``<prefix>/ui`` serves all of
+``<prefix>/ui`` itself, whatever the order it and the router were added in.
 """
 
 from __future__ import annotations
@@ -118,7 +119,7 @@ class TestRouterOnly:
         assert client.get("/auth/ui/auth.js").status_code == 200
 
     @pytest.mark.parametrize("prefix", PREFIXES)
-    def test_config_is_node_shaped_and_headless(self, prefix):
+    def test_config_is_node_shaped(self, prefix):
         client, p = _router_only(prefix)
         resp = client.get(f"{p}/ui/config")
         assert resp.status_code == 200
@@ -126,8 +127,21 @@ class TestRouterOnly:
         assert set(data) == NODE_CONFIG_KEYS
         assert set(data["features"]) == NODE_FEATURE_KEYS
         assert data["apiPrefix"] == p
-        # No pages here: auth.js must not send the browser to a missing login page.
-        assert data["headless"] is True
+        # The configured flag, false by default, as on awesome-node-auth: not
+        # forced to true because the pages are not mounted.
+        assert data["headless"] is False
+
+    @pytest.mark.parametrize("prefix", PREFIXES)
+    def test_config_reports_the_configured_headless_flag(self, prefix):
+        client, p = _router_only(prefix, ui_config={"headless": True})
+        assert client.get(f"{p}/ui/config").json()["headless"] is True
+
+    def test_settings_store_headless_flag(self):
+        config = _config(ui_config={"headless": False})
+        store = _DictSettingsStore({"ui_config": {"headless": True}})
+        app = FastAPI()
+        app.include_router(_router(config, settings_store=store))
+        assert TestClient(app).get("/auth/ui/config").json()["headless"] is True
 
     @pytest.mark.parametrize("prefix", PREFIXES)
     @pytest.mark.parametrize("page", ["login", "register", "forgot-password", "base.css", ""])
@@ -199,7 +213,7 @@ class TestRouterOnly:
         app.include_router(_router(_config()), prefix="/v1")
         client = TestClient(app)
         assert client.get("/v1/auth/ui/auth.js").content == BUNDLED_AUTH_JS
-        assert client.get("/v1/auth/ui/config").json()["headless"] is True
+        assert client.get("/v1/auth/ui/config").json()["headless"] is False
 
     def test_a_root_mount_does_not_hide_auth_js(self, tmp_path):
         # A catch-all mount at "/" (an SPA) is not a UI at <prefix>/ui.
@@ -209,7 +223,7 @@ class TestRouterOnly:
         app.mount("/", StaticFiles(directory=str(tmp_path), html=True), name="spa")
         client = TestClient(app)
         assert client.get("/auth/ui/auth.js").content == BUNDLED_AUTH_JS
-        assert client.get("/auth/ui/config").json()["headless"] is True
+        assert client.get("/auth/ui/config").json()["headless"] is False
 
 
 class TestWithPages:
@@ -231,8 +245,17 @@ class TestWithPages:
         cfg = client.get(f"{p}/ui/config").json()
         assert set(cfg) == NODE_CONFIG_KEYS
         assert cfg["apiPrefix"] == p
-        # Answered by the mounted UI, which serves the pages: not headless.
         assert cfg["headless"] is False
+
+    @pytest.mark.parametrize("order", ORDERS)
+    @pytest.mark.parametrize("prefix", PREFIXES)
+    def test_mounted_pages_report_their_own_headless_switch(self, order, prefix):
+        # The router alone would answer headless: true (the configured flag);
+        # the mounted UI, which serves the pages, answers false.
+        config = _config(prefix, ui_config={"headless": True})
+        p = config.api_prefix
+        client = _with_ui(order, config, lambda app: mount_ui(app, config))
+        assert client.get(f"{p}/ui/config").json()["headless"] is False
 
     @pytest.mark.parametrize("order", ORDERS)
     def test_mounted_ui_serves_its_own_auth_js(self, order, tmp_path):
@@ -265,7 +288,8 @@ class TestWithPages:
     @pytest.mark.parametrize("order", ORDERS)
     def test_hand_mounted_build_ui_router(self, order):
         # 1.x style: app.mount("/auth/ui", build_ui_router(...)) next to the router.
-        config = _config()
+        # ui_config headless makes the router's answer differ from the mount's.
+        config = _config(ui_config={"headless": True})
         client = _with_ui(
             order, config, lambda app: app.mount("/auth/ui", build_ui_router(config=config))
         )
@@ -275,7 +299,7 @@ class TestWithPages:
 
     def test_ui_mounted_under_another_path_leaves_the_router_alone(self):
         # 1.x docstring layout: API under /api/auth, UI by hand at /auth/ui.
-        config = _config("/api/auth")
+        config = _config("/api/auth", ui_config={"headless": True})
         app = FastAPI()
         app.include_router(_router(config))
         app.mount("/auth/ui", build_ui_router(config=config))

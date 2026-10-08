@@ -206,8 +206,8 @@ def mount_ui(
     With the default prefix the login page is ``/auth/ui/login``; with
     ``api_prefix="/api/auth"`` it moves to ``/api/auth/ui/login``.  The auth
     router serves ``auth.js`` and ``/config`` there without this call; once
-    the UI is mounted it serves them itself (``headless: false`` in
-    ``/config``), whether this call comes before or after
+    the UI is mounted it serves them itself (its ``/config`` reports its own
+    *headless* switch), whether this call comes before or after
     ``app.include_router(configurator.router())``.
 
     Parameters
@@ -277,9 +277,10 @@ def _add_runtime_routes(
 
     Called by ``AuthConfigurator.router()``: every awesome-lang-auth backend
     serves the browser runtime at ``<api_prefix>/ui/auth.js`` as soon as its
-    auth router is mounted.  Without the pages ``/config`` reports
-    ``headless: true``, so ``auth.js`` does not send the browser to a login
-    page that is not there (awesome-node-auth's headless mode).
+    auth router is mounted.  ``/config`` reports the configured
+    ``ui_config["headless"]`` (``false`` unless set), as awesome-node-auth
+    reports ``ui.headless``: it is not forced to ``true`` when the pages are
+    not mounted, so every backend returns the same document.
     """
     api_prefix: str = getattr(config, "api_prefix", DEFAULT_API_PREFIX)
 
@@ -287,11 +288,14 @@ def _add_runtime_routes(
         return FileResponse(str(_BUNDLED_AUTH_JS), media_type=_AUTH_JS_MEDIA_TYPE)
 
     async def ui_config() -> dict:
+        ui_cfg = await _stored_ui_config(settings_store)
+        if ui_cfg is None:
+            ui_cfg = getattr(config, "ui_config", None) or {}
         return _build_config(
             config,
             api_prefix,
-            headless=True,
-            ui_cfg=await _stored_ui_config(settings_store),
+            headless=bool(ui_cfg.get("headless", False)),
+            ui_cfg=ui_cfg,
             on_register=on_register,
         )
 

@@ -382,7 +382,7 @@ class TestUiConfig:
         data = resp.json()
         assert set(data) == {"apiPrefix", "features", "ui", "headless"}
         assert data["apiPrefix"] == "/api/auth"
-        assert data["headless"] is True
+        assert data["headless"] is False  # the configured flag, as on awesome-node-auth
 
 
 # ---------------------------------------------------------------------------

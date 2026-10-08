@@ -45,7 +45,7 @@ GET  /oauth/{provider}
 GET  /oauth/{provider}/callback
 
 GET  /ui/auth.js   (the awesome-node-auth browser runtime)
-GET  /ui/config    (its configuration; headless unless the UI pages are mounted)
+GET  /ui/config    (its configuration: apiPrefix, features, ui, headless)
 GET  /tools/stream (SSE)
 """
 
@@ -274,7 +274,9 @@ class AuthConfigurator:
         ``GET <api_prefix>/ui/config`` answer as soon as this router is
         included.  The built-in UI pages are optional and mounted separately
         with :func:`~awesome_python_auth.ui_router.mount_ui`; until then
-        ``/ui/config`` reports ``headless: true`` and ``/ui/login`` is 404.
+        ``/ui/login`` is 404.  ``/ui/config`` reports ``headless`` from
+        ``AuthConfig.ui_config["headless"]`` (``false`` unless set), as
+        awesome-node-auth reports ``ui.headless``.
 
         Parameters
         ----------

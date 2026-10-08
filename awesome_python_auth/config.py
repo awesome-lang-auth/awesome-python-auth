@@ -47,9 +47,12 @@ class AuthConfig:
         Issuer name shown in authenticator apps.  Default: ``"awesome-python-auth"``.
     ui_config:
         UI features and theme for the browser runtime, as
-        ``{"features": {...}, "ui": {...}}``.  ``GET <api_prefix>/ui/config``
-        and the built-in pages report them in awesome-node-auth's shape
-        (``apiPrefix``, ``features``, ``ui``, ``headless``).
+        ``{"features": {...}, "ui": {...}, "headless": bool}``.
+        ``GET <api_prefix>/ui/config`` and the built-in pages report them in
+        awesome-node-auth's shape (``apiPrefix``, ``features``, ``ui``,
+        ``headless``).  Set ``"headless": True`` when your SPA has its own
+        login pages and the built-in ones are not mounted: the auth router's
+        ``/ui/config`` then tells ``auth.js`` not to redirect to them.
     email:
         Optional email configuration dict.  Keys depend on the provider.
         Pass ``{"enabled": True}`` to signal that email sending is active.
