@@ -9,21 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Identity events are published automatically (#13): the auth router publishes login
-  (success and failure), logout, session rotation, user created/deleted, password
-  changed, email verified/changed, 2FA enabled/disabled and OAuth success/conflict
-  events, and the admin router publishes role assigned/revoked, to the `AuthEventBus`
-  passed as the new `event_bus` argument of `AuthConfigurator.router()` /
-  `build_admin_router()` or set on the new `AuthConfig.event_bus` field (the auth router
-  also falls back to `AuthConfig.tools.event_bus`). New event name
-  `AuthEventNames.USER_EMAIL_CHANGED` (`identity.user.email.changed`).
+- The auth router and the admin router publish identity events automatically (#13).
+  Auth router: login success/failure, logout, session rotation, user created/deleted,
+  password changed, email verified/changed, 2FA enabled/disabled, OAuth
+  success/conflict. Admin router: role assigned/revoked.
+- New optional `event_bus` argument on `AuthConfigurator.router()` and
+  `build_admin_router()`, and new optional `AuthConfig.event_bus` field (#13). The
+  argument wins over the field. The auth router also falls back to
+  `AuthConfig.tools.event_bus`, so apps that already pass `AuthTools(event_bus=...)`
+  start receiving these events on that bus.
+- New event name `AuthEventNames.USER_EMAIL_CHANGED` (`identity.user.email.changed`),
+  published on email change (#13).
 
 ### Changed
 
 - Package description now names the current client libraries,
   `@awesome-lang-auth/angular` and `awesome_flutter_auth`.
-- Project URLs: added Homepage, Documentation and Changelog; Repository and Issues point
-  to the `awesome-lang-auth` GitHub organization (#11).
+- Package metadata now has project URLs (1.1.0 had none): Homepage, Documentation,
+  Repository, Issues and Changelog. Repository and Issues point to the
+  `awesome-lang-auth` GitHub organization (#11).
 - Admin `POST /api/users/{user_id}/roles` now passes an optional `tenantId` from the
   request body to `RolesPermissionsStore.add_role_to_user(..., tenant_id=...)`; it was
   ignored before (#13).
