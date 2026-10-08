@@ -20,6 +20,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   app.add_middleware(CsrfMiddleware, api_prefix="/api/auth")
   ```
 
+  Change both or neither: if `AuthConfig.api_prefix` and `CsrfMiddleware(api_prefix=...)`
+  differ, CSRF is not enforced on the auth routes and nothing warns. An app that already
+  passes `api_prefix="/api/auth"` to `AuthConfig` only must now pass it to
+  `CsrfMiddleware` too. To adopt `/auth`, remove `api_prefix` from both.
+
+- FastAPI derives OpenAPI `operationId`s from the route path, so with the new default
+  they change too (`disable_2fa_api_auth_2fa_disable_post` becomes
+  `disable_2fa_auth_2fa_disable_post`). Clients generated from the OpenAPI document
+  keep their method names if you pin `api_prefix="/api/auth"`.
+
 ### Added
 
 - `mount_ui(app, config)` mounts the built-in UI under `<api_prefix>/ui`, so the pages

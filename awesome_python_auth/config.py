@@ -9,7 +9,7 @@ from .models import StoredUser, UserStore
 
 #: Default URL prefix of the auth API, the same on every awesome-lang-auth backend.
 #: The built-in UI is served under ``<prefix>/ui`` (``/auth/ui/login``,
-#: ``/auth/ui/auth.js``).  Until 1.x it was ``"/api/auth"``.
+#: ``/auth/ui/auth.js``).  In 1.x it was ``"/api/auth"``.
 DEFAULT_API_PREFIX = "/auth"
 
 
@@ -25,7 +25,7 @@ class AuthConfig:
         ``AuthOptions.apiPrefix`` in ``awesome-node-auth-flutter``.
         The built-in UI (:func:`~awesome_python_auth.ui_router.mount_ui`) is
         served under ``<api_prefix>/ui``.
-        Default: ``"/auth"`` (``"/api/auth"`` until 1.x; pass
+        Default: ``"/auth"`` (``"/api/auth"`` in 1.x; pass
         ``api_prefix="/api/auth"`` to keep the old routes).
     access_token_secret:
         Secret used to sign JWT access tokens.  Keep this private.

@@ -40,7 +40,7 @@ class CsrfMiddleware(BaseHTTPMiddleware):
         ``AuthConfig.api_prefix``.  CSRF validation is only enforced for
         requests to this prefix (the prefix itself or a path below it, so
         ``/auth`` does not cover ``/authors``).  Default: ``"/auth"``
-        (``"/api/auth"`` until 1.x).
+        (``"/api/auth"`` in 1.x).
     exclude_paths:
         Additional URL path suffixes to skip CSRF validation on (e.g. refresh,
         login).  Auth-flow endpoints that do not require an active session are

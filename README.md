@@ -89,6 +89,13 @@ config = AuthConfig(api_prefix="/api/auth", access_token_secret="...")
 app.add_middleware(CsrfMiddleware, api_prefix="/api/auth")
 ```
 
+**Change both or neither.** If `AuthConfig.api_prefix` and
+`CsrfMiddleware(api_prefix=...)` differ, CSRF is not enforced on the auth routes and
+nothing warns. If you already pass `api_prefix="/api/auth"` to `AuthConfig` but add
+`CsrfMiddleware` without it, pass the same value to the middleware now: left at its
+default it protects `/auth`, not your routes. To adopt `/auth`, remove `api_prefix`
+from both.
+
 Everything else follows `api_prefix`: the routes, the JWKS endpoint, and the
 built-in UI mounted with `mount_ui(app, config)` (then at `/api/auth/ui/login` and
 `/api/auth/ui/auth.js`). Payloads and cookies are unchanged. If you mounted
@@ -277,6 +284,9 @@ on any other page, so with the default prefix an SPA that loads
 prefix, pages outside the UI call `AwesomeNodeAuth.init({ apiPrefix: '/api/auth' })`.
 Pass `ui_assets_dir=` for custom pages, or `headless=True` when your SPA has its
 own login pages (the static assets, `auth.js` included, are still served).
+`GET <api_prefix>/ui/config` is answered by the auth router with
+`AuthConfig.ui_config`, which reports `headless` only if you put it there, so in
+headless mode the SPA calls `AwesomeNodeAuth.init({ headless: true })` itself.
 `build_ui_router(...)` and `ui_mount_path(prefix)` remain available to mount the
 UI by hand.
 
