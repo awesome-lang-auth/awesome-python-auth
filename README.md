@@ -101,8 +101,9 @@ Everything else follows `api_prefix`: the routes, the JWKS endpoint, `auth.js`
 and `/ui/config` (then `/api/auth/ui/auth.js` and `/api/auth/ui/config`), and the
 built-in pages mounted with `mount_ui(app, config)` (then `/api/auth/ui/login`).
 Payloads and cookies are unchanged, except `GET <api_prefix>/ui/config`, which now
-returns the awesome-node-auth document (`apiPrefix`, `features`, `ui`, `headless`)
-built from `AuthConfig.ui_config` instead of the raw dict. If you mounted
+returns the awesome-node-auth document (`apiPrefix`, `features`, `ui`, `translations`,
+`lang`, `headless`) built from `AuthConfig.ui_config` instead of the raw dict, with
+`"Awesome Node Auth"` as the default `ui.siteName`. If you mounted
 `build_ui_router(...)` yourself at `/auth/ui` next to an API at `/api/auth`, switch
 to `mount_ui(app, config)`: `auth.js` derives the API prefix from the page URL, so
 the UI belongs under the API prefix.
@@ -260,7 +261,7 @@ All endpoints are mounted under `api_prefix` (default: `/auth`; it was `/api/aut
 | Method | Path | Description |
 |---|---|---|
 | `GET` | `/ui/auth.js` | Browser runtime (awesome-node-auth `auth.js`) |
-| `GET` | `/ui/config` | Its configuration: `apiPrefix`, `features`, `ui` (theme, branding), `headless` |
+| `GET` | `/ui/config` | Its configuration: `apiPrefix`, `features`, `ui` (theme, branding), `translations`, `lang`, `headless` |
 | `GET` | `/tools/stream` | Server-Sent Events stream |
 
 ---
@@ -287,23 +288,34 @@ mount_ui(app, config)                      # optional: /auth/ui/login, ...
 
 Without `mount_ui` the pages answer 404 and `auth.js` answers 200.
 `GET <api_prefix>/ui/config` returns the awesome-node-auth document (`apiPrefix`,
-`features`, `ui`, `headless`) built from `AuthConfig.ui_config`, or from the
-`"ui_config"` entry of the `settings_store` passed to `router()` when it holds one.
-Its `headless` is `ui_config["headless"]`, `false` unless you set it, as on
-awesome-node-auth (`ui.headless`). When your SPA has its own login pages, set
+`features`, `ui`, `translations`, `lang`, `headless`; byte for byte node's with the
+defaults) built from `AuthConfig.ui_config`, or from the `"ui_config"` entry of the
+`settings_store` passed to `router()` when it holds one. `lang` is the `?lang=`
+parameter, else `AuthConfig.mailer.default_lang`, else `"en"`. Its `headless` is
+`ui_config["headless"]`, `false` unless you set it, as on awesome-node-auth
+(`ui.headless`). When your SPA has its own login pages, set
 `ui_config={"headless": True}`, or pass `headless: true` (or a `loginUrl`) to
 `AwesomeNodeAuth.init()`: otherwise `auth.js` redirects to `<api_prefix>/ui/login`
 when the session expires.
 
-An app mounted at `<api_prefix>/ui` serves everything under that path, `auth.js`
-and `/config` included, whether it is added before or after the router; its
-`/config` reports its own `headless` switch (`false` for `mount_ui(app, config)`,
-which serves the pages). Pass it the same
-`settings_store` as `router()` so `/ui/config` keeps reading it. Pass
-`ui_assets_dir=` for custom pages (without an `auth.js` there, the bundled one is
-served), or `headless=True` to serve the static assets without the pages.
-`build_ui_router(...)` and `ui_mount_path(prefix)` remain available to mount the
-UI by hand.
+Its `apiPrefix` is the prefix the request came through, as awesome-node-auth takes
+it from `req.baseUrl`: `/v1/auth` under `app.include_router(router, prefix="/v1")`,
+`/api/auth` when the router sits in a sub-application mounted at `/api`, and
+`/svc/auth` behind `uvicorn --root-path /svc`. `auth.js` uses that value for its
+API calls once it has fetched `/ui/config`.
+
+The built-in UI app (`mount_ui`, or `build_ui_router(...)` mounted by hand) at
+`<api_prefix>/ui` serves everything under that path, `auth.js` and `/config`
+included, whether it is added before or after the router; its `/config` reports
+its own `headless` switch (`false` for `mount_ui(app, config)`, which serves the
+pages). Pass it the same `settings_store` as `router()` so `/ui/config` keeps
+reading it; it reads `features.register` from `AuthConfig.on_register` or
+`ui_config`, not from `router(on_register=...)`. Pass `ui_assets_dir=` for custom
+pages (without an `auth.js` there, the bundled one is served), or `headless=True`
+to serve the static assets without the pages. Any other app you mount at
+`<api_prefix>/ui`, such as `StaticFiles`, keeps its own files, and the router still
+answers `auth.js` and `/config` when it is included first. `ui_mount_path(prefix)`
+returns the mount path.
 
 `auth.js` is the awesome-node-auth runtime, shipped byte for byte. It derives the
 API prefix from the page URL (everything before `/ui/`) and falls back to `/auth`

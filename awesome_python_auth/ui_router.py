@@ -23,11 +23,20 @@ Or with a custom assets directory::
 
     mount_ui(app, auth_config, ui_assets_dir="/path/to/custom/ui")
 
-An app mounted at ``<api_prefix>/ui`` (by :func:`mount_ui`, or by hand with
-:func:`build_ui_router`) owns that path: it serves its own ``auth.js`` and
-``/config``, and the auth router's two routes step aside, whichever was added
-first.  ``auth.js`` derives the API prefix from the page URL (everything before
-``/ui/``), so the UI has to sit under the prefix of the auth router it talks to.
+A UI app built by :func:`build_ui_router` and mounted at ``<api_prefix>/ui``
+(by :func:`mount_ui`, or by hand) owns that path: it serves its own
+``auth.js`` and ``/config``, and the auth router's two routes step aside,
+whichever was added first.  ``auth.js`` derives the API prefix from the page
+URL (everything before ``/ui/``), so the UI has to sit under the prefix of the
+auth router it talks to.
+
+``/config`` (and the pages' ``window.__AUTH_CONFIG__``) is awesome-node-auth's
+document: ``apiPrefix``, ``features``, ``ui``, ``translations``, ``lang`` and
+``headless``, in that order.  ``apiPrefix`` is the prefix the request came
+through, as node takes it from ``req.baseUrl``: under
+``app.include_router(router, prefix="/v1")`` it is ``/v1/auth``, and under a
+sub-application or a server ``root_path`` (``uvicorn --root-path /svc``) it
+includes that path too, since the browser has to call it.
 """
 
 from __future__ import annotations
@@ -47,17 +56,15 @@ from starlette.types import Scope
 
 from .config import DEFAULT_API_PREFIX
 
-try:  # Starlette >= 0.33: the path routes match against, without root_path.
-    from starlette._utils import get_route_path as _get_route_path
-except ImportError:  # pragma: no cover - older Starlette than FastAPI 0.115 allows
-    def _get_route_path(scope: Scope) -> str:
-        return scope["path"]
-
 # Directory bundled with the package
 _BUNDLED_ASSETS = Path(__file__).parent / "ui_assets"
 # The awesome-node-auth browser runtime, vendored byte for byte.
 _BUNDLED_AUTH_JS = _BUNDLED_ASSETS / "auth.js"
 _AUTH_JS_MEDIA_TYPE = "text/javascript"
+# awesome-node-auth's default ui.siteName, the same on every backend.
+_DEFAULT_SITE_NAME = "Awesome Node Auth"
+# Set on the apps build_ui_router returns: the auth router steps aside for them.
+_UI_APP_MARK = "_awesome_python_auth_ui"
 
 
 def build_ui_router(
@@ -73,14 +80,16 @@ def build_ui_router(
     Mount it at ``ui_mount_path(api_prefix)`` (or let :func:`mount_ui` do it)
     so ``auth.js`` finds the API from the page URL.  Mounted there, it takes
     over ``<api_prefix>/ui/auth.js`` and ``<api_prefix>/ui/config`` from the
-    auth router.
+    auth router, and the ``apiPrefix`` it reports includes any path the
+    request came through above it (a sub-application's mount path).
 
     Parameters
     ----------
     config:
         The :class:`~awesome_python_auth.config.AuthConfig` instance.
     api_prefix:
-        Override the API prefix (defaults to ``config.api_prefix``).
+        Override the API prefix (defaults to ``config.api_prefix``).  Mounted
+        anywhere other than ``<api_prefix>/ui``, the UI reports it as is.
     ui_assets_dir:
         Path to a custom directory of HTML/CSS/JS assets.  Defaults to the
         bundled ``ui_assets/`` directory shipped with the package.  If it has
@@ -95,6 +104,7 @@ def build_ui_router(
         ``/config`` and in the pages, as on the auth router.
     """
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+    setattr(app, _UI_APP_MARK, True)
 
     resolved_api_prefix: str = api_prefix or getattr(config, "api_prefix", DEFAULT_API_PREFIX)
     assets_path = Path(ui_assets_dir) if ui_assets_dir else _BUNDLED_ASSETS
@@ -105,9 +115,10 @@ def build_ui_router(
     async def ui_config(request: Request) -> dict:
         return _build_config(
             config,
-            resolved_api_prefix,
+            _mounted_api_prefix(request.scope, resolved_api_prefix),
             headless=headless,
             ui_cfg=await _stored_ui_config(settings_store),
+            lang=request.query_params.get("lang"),
         )
 
     # ── /auth.js: the custom one if the assets directory has it ──────────────
@@ -115,7 +126,7 @@ def build_ui_router(
     custom_auth_js = assets_path / "auth.js"
     served_auth_js = custom_auth_js if custom_auth_js.is_file() else _BUNDLED_AUTH_JS
 
-    @app.get("/auth.js")
+    @app.api_route("/auth.js", methods=["GET", "HEAD"])
     async def auth_js() -> FileResponse:
         return FileResponse(str(served_auth_js), media_type=_AUTH_JS_MEDIA_TYPE)
 
@@ -175,8 +186,9 @@ def build_ui_router(
         return _render_ssr(
             html_file,
             config,
-            resolved_api_prefix,
+            _mounted_api_prefix(request.scope, resolved_api_prefix),
             ui_cfg=await _stored_ui_config(settings_store),
+            lang=request.query_params.get("lang"),
         )
 
     _mount_static(app, assets_path)
@@ -244,11 +256,12 @@ def mount_ui(
 
 class _UiRuntimeRoute(APIRoute):
     """A route of the auth router under ``<api_prefix>/ui`` that steps aside
-    when an app is mounted at that ``/ui`` path.
+    when a UI app is mounted at that ``/ui`` path.
 
     The mounted UI (:func:`mount_ui`, or :func:`build_ui_router` mounted by
     hand) then answers the request, so the auth router never shadows it,
-    whichever of the two was added to the application first.
+    whichever of the two was added to the application first.  Any other app
+    mounted there (``StaticFiles``, say) does not count.
     """
 
     def matches(self, scope: Scope) -> tuple[Match, Scope]:
@@ -259,11 +272,21 @@ class _UiRuntimeRoute(APIRoute):
 
 
 def _ui_app_mounted(scope: Scope) -> bool:
-    """Whether the application has a mount at the parent path of the request
-    (``/auth/ui`` for ``/auth/ui/auth.js``)."""
-    ui_path = _get_route_path(scope).rsplit("/", 1)[0]
+    """Whether the application has a :func:`build_ui_router` app mounted at
+    the parent path of the request (``/auth/ui`` for ``/auth/ui/auth.js``)."""
+    ui_path = _route_path(scope).rsplit("/", 1)[0]
     routes = getattr(scope.get("app"), "routes", None) or ()
-    return any(isinstance(route, Mount) and route.path == ui_path for route in routes)
+    return any(
+        isinstance(route, Mount) and route.path == ui_path and _is_ui_app(route)
+        for route in routes
+    )
+
+
+def _is_ui_app(mount: Mount) -> bool:
+    # Mount(middleware=...) wraps the app; _base_app is the one it was given.
+    return any(
+        getattr(getattr(mount, attr, None), _UI_APP_MARK, False) for attr in ("app", "_base_app")
+    )
 
 
 def _add_runtime_routes(
@@ -280,29 +303,34 @@ def _add_runtime_routes(
     auth router is mounted.  ``/config`` reports the configured
     ``ui_config["headless"]`` (``false`` unless set), as awesome-node-auth
     reports ``ui.headless``: it is not forced to ``true`` when the pages are
-    not mounted, so every backend returns the same document.
+    not mounted, so every backend returns the same document.  Its
+    ``apiPrefix`` is where the request reached the router, so it follows
+    ``include_router(..., prefix=...)`` and sub-application mounts.
     """
     api_prefix: str = getattr(config, "api_prefix", DEFAULT_API_PREFIX)
 
     async def ui_auth_js() -> FileResponse:
         return FileResponse(str(_BUNDLED_AUTH_JS), media_type=_AUTH_JS_MEDIA_TYPE)
 
-    async def ui_config() -> dict:
+    async def ui_config(request: Request) -> dict:
         ui_cfg = await _stored_ui_config(settings_store)
         if ui_cfg is None:
             ui_cfg = getattr(config, "ui_config", None) or {}
+        path = _browser_path(request.scope)
+        suffix = "/ui/config"
         return _build_config(
             config,
-            api_prefix,
+            (path[: -len(suffix)] if path.endswith(suffix) else "") or api_prefix,
             headless=bool(ui_cfg.get("headless", False)),
             ui_cfg=ui_cfg,
             on_register=on_register,
+            lang=request.query_params.get("lang"),
         )
 
     router.add_api_route(
         "/ui/auth.js",
         ui_auth_js,
-        methods=["GET"],
+        methods=["GET", "HEAD"],
         include_in_schema=False,
         route_class_override=_UiRuntimeRoute,
     )
@@ -317,6 +345,35 @@ def _add_runtime_routes(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _route_path(scope: Scope) -> str:
+    """The path the application owning *scope* routes on: ``scope["path"]``
+    without the ``root_path`` its mounts (or the server) put in front."""
+    path: str = scope["path"]
+    root_path: str = scope.get("root_path", "")
+    if not root_path or not path.startswith(root_path):
+        return path
+    rest = path[len(root_path):]
+    return rest if rest == "" or rest.startswith("/") else path
+
+
+def _browser_path(scope: Scope) -> str:
+    """The request path as the browser sees it, ``root_path`` included."""
+    return scope.get("root_path", "") + _route_path(scope)
+
+
+def _mounted_api_prefix(scope: Scope, api_prefix: str) -> str:
+    """The API prefix a UI mounted at ``<api_prefix>/ui`` reports.
+
+    Like node's ``req.baseUrl`` without ``/ui``, it includes the paths the
+    request came through (a sub-application at ``/api`` gives ``/api/auth``).
+    A UI mounted elsewhere reports *api_prefix* as configured.
+    """
+    root_path = scope.get("root_path", "")
+    if root_path.endswith(ui_mount_path(api_prefix)):
+        return root_path[: -len("/ui")] or api_prefix
+    return api_prefix
 
 
 async def _stored_ui_config(settings_store: Any) -> dict | None:
@@ -334,11 +391,18 @@ def _build_config(
     headless: bool = False,
     ui_cfg: dict | None = None,
     on_register: Any = None,
+    lang: str | None = None,
 ) -> dict:
-    """Build the ``/config`` response payload.
+    """Build the ``/config`` response payload: awesome-node-auth's document.
 
-    *ui_cfg* replaces ``config.ui_config`` (a settings-store document);
-    *on_register* is the auth router's hook, which enables ``register`` too.
+    The keys and their order are node's (``apiPrefix``, ``features``, ``ui``,
+    ``translations``, ``lang``, ``headless``), and ``ui`` leaves out what is
+    not set, as node's ``JSON.stringify`` drops ``undefined``, so with the
+    defaults the JSON is node's byte for byte.  *ui_cfg* replaces
+    ``config.ui_config`` (a settings-store document); *on_register* is the
+    auth router's hook, which enables ``register`` too; *lang* is the
+    ``?lang=`` query parameter, else ``config.mailer.default_lang``, else
+    ``"en"``.
     """
     if ui_cfg is None:
         ui_cfg = getattr(config, "ui_config", None) or {}
@@ -365,27 +429,35 @@ def _build_config(
         ),
         "twoFactor": bool(ui_cfg.get("features", {}).get("twoFactor")),
     }
-    ui_theme = ui_cfg.get("ui", {})
+    ui_theme = ui_cfg.get("ui") or {}
     ui = {
-        "primaryColor": ui_theme.get("primaryColor", "#4a90d9"),
-        "secondaryColor": ui_theme.get("secondaryColor", "#6c757d"),
+        "primaryColor": ui_theme.get("primaryColor") or "#4a90d9",
+        "secondaryColor": ui_theme.get("secondaryColor") or "#6c757d",
         "logoUrl": ui_theme.get("logoUrl"),
-        "siteName": ui_theme.get("siteName", "Awesome Auth"),
+        "siteName": ui_theme.get("siteName") or _DEFAULT_SITE_NAME,
         "customCss": ui_theme.get("customCss"),
         "bgColor": ui_theme.get("bgColor"),
         "bgImage": ui_theme.get("bgImage"),
         "cardBg": ui_theme.get("cardBg"),
     }
+    mailer = getattr(config, "mailer", None)
     return {
         "apiPrefix": api_prefix,
         "features": features,
-        "ui": ui,
+        "ui": {key: value for key, value in ui.items() if value is not None},
+        "translations": {},
+        "lang": lang or getattr(mailer, "default_lang", None) or "en",
         "headless": headless,
     }
 
 
 def _render_ssr(
-    html_file: Path, config: Any, api_prefix: str, *, ui_cfg: dict | None = None
+    html_file: Path,
+    config: Any,
+    api_prefix: str,
+    *,
+    ui_cfg: dict | None = None,
+    lang: str | None = None,
 ) -> HTMLResponse:
     """Read an HTML file, inject SSR config, and return the response.
 
@@ -395,7 +467,7 @@ def _render_ssr(
     # Read from the already-validated, resolved path to avoid any ambiguity
     resolved = html_file.resolve()
     html = resolved.read_text(encoding="utf-8")
-    cfg = _build_config(config, api_prefix, ui_cfg=ui_cfg)
+    cfg = _build_config(config, api_prefix, ui_cfg=ui_cfg, lang=lang)
     ui_theme = cfg.get("ui", {})
 
     # Build inline CSS variables (prevents FOUC)
@@ -439,8 +511,12 @@ def _render_ssr(
             f'<img src="{ui_theme["logoUrl"]}" alt="Logo" class="logo">',
         )
 
-    # Bootstrap config for auth.js
-    script_tag = f"<script>window.__AUTH_CONFIG__ = {json.dumps(cfg)};</script>"
+    # Bootstrap config for auth.js.  <, > and & are escaped so no value (the
+    # ?lang= parameter included) can close the script element.
+    cfg_json = (
+        json.dumps(cfg).replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
+    )
+    script_tag = f"<script>window.__AUTH_CONFIG__ = {cfg_json};</script>"
     html = html.replace("</head>", f"{style_tags}\n{script_tag}\n</head>")
 
     return HTMLResponse(

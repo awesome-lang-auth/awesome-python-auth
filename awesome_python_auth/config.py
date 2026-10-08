@@ -49,8 +49,8 @@ class AuthConfig:
         UI features and theme for the browser runtime, as
         ``{"features": {...}, "ui": {...}, "headless": bool}``.
         ``GET <api_prefix>/ui/config`` and the built-in pages report them in
-        awesome-node-auth's shape (``apiPrefix``, ``features``, ``ui``,
-        ``headless``).  Set ``"headless": True`` when your SPA has its own
+        awesome-node-auth's document (``apiPrefix``, ``features``, ``ui``,
+        ``translations``, ``lang``, ``headless``).  Set ``"headless": True`` when your SPA has its own
         login pages and the built-in ones are not mounted: the auth router's
         ``/ui/config`` then tells ``auth.js`` not to redirect to them.
     email:

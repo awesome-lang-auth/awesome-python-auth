@@ -45,7 +45,7 @@ GET  /oauth/{provider}
 GET  /oauth/{provider}/callback
 
 GET  /ui/auth.js   (the awesome-node-auth browser runtime)
-GET  /ui/config    (its configuration: apiPrefix, features, ui, headless)
+GET  /ui/config    (its configuration: apiPrefix, features, ui, translations, lang, headless)
 GET  /tools/stream (SSE)
 """
 
