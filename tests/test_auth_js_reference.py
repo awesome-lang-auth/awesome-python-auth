@@ -15,6 +15,7 @@ checkout, so the hash holds on Windows too.
 from __future__ import annotations
 
 import hashlib
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -62,8 +63,12 @@ class TestBundledAuthJs:
         body = _served_auth_js("/api/auth")
         assert hashlib.sha256(body).hexdigest() == AUTH_JS_REFERENCE_SHA256
 
-    @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
     def test_served_file_is_valid_javascript(self, tmp_path):
+        # CI sets AUTH_JS_REQUIRE_NODE=1 so this check cannot be skipped there.
+        if shutil.which("node") is None:
+            if os.environ.get("AUTH_JS_REQUIRE_NODE"):
+                pytest.fail("AUTH_JS_REQUIRE_NODE is set but node is not installed")
+            pytest.skip("node is not installed")
         script = tmp_path / "auth.js"
         script.write_bytes(_served_auth_js())
         result = subprocess.run(

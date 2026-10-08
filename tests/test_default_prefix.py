@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import json
 import re
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI
@@ -20,11 +22,21 @@ from awesome_python_auth import (
     AuthConfigurator,
     CsrfMiddleware,
     InMemoryUserStore,
+    build_ui_router,
     mount_ui,
     ui_mount_path,
 )
 
 SECRET = "a-very-long-secret-key-that-is-at-least-32-chars-long"
+
+AUTH_JS = Path(__file__).resolve().parent.parent / "awesome_python_auth" / "ui_assets" / "auth.js"
+
+# The lines of the vendored auth.js that _auth_js_api_prefix mirrors.
+AUTH_JS_PREFIX_RULE = (
+    b"let defaultPrefix = window.location.pathname.includes('/ui/')\n"
+    b"        ? window.location.pathname.split('/ui/')[0]\n"
+    b"        : '/auth';\n"
+)
 
 
 def _auth_js_api_prefix(page_path: str) -> str:
@@ -74,6 +86,15 @@ class TestDefaults:
         assert ui_mount_path() == "/auth/ui"
         assert ui_mount_path("/api/auth") == "/api/auth/ui"
         assert ui_mount_path("/auth/") == "/auth/ui"
+
+    def test_build_ui_router_falls_back_to_the_default_prefix(self):
+        # A config object without api_prefix gets the default, not the 1.x /api/auth.
+        ui = build_ui_router(config=SimpleNamespace())
+        assert TestClient(ui).get("/config").json()["apiPrefix"] == "/auth"
+
+    def test_auth_js_rule_mirrored_here_is_the_vendored_one(self):
+        # _auth_js_api_prefix copies this rule; the auth.js pin keeps the copy honest.
+        assert AUTH_JS_PREFIX_RULE in AUTH_JS.read_bytes()
 
     def test_router_routes_are_under_auth(self):
         router = AuthConfigurator(AuthConfig(access_token_secret=SECRET), InMemoryUserStore()).router()
@@ -173,6 +194,13 @@ class TestCsrfPrefix:
         client = self._client(api_prefix=prefix)
         assert client.post("/api/auth/profile").status_code == 403
         assert client.post("/auth/profile").status_code == 200
+
+    @pytest.mark.parametrize("prefix", ["", "/"])
+    def test_empty_prefix_covers_every_path(self, prefix):
+        # As in 1.x: an empty (or root) prefix enforces CSRF on every route.
+        client = self._client(api_prefix=prefix)
+        assert client.post("/authors").status_code == 403
+        assert client.post("/auth/profile").status_code == 403
 
     def test_valid_token_passes_under_default_prefix(self):
         client = self._client()
