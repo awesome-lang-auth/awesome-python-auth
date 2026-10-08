@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "awesome-python-auth"
-version = "1.2.0"
+version = "2.0.0"
 description = "FastAPI authentication library compatible with @awesome-lang-auth/angular and awesome_flutter_auth"
 readme = "README.md"
 license = { text = "MIT" }
