@@ -266,6 +266,10 @@ class AuthConfigurator:
     ) -> APIRouter:
         """Return a configured :class:`fastapi.APIRouter`.
 
+        Every route sits under ``AuthConfig.api_prefix`` (default ``"/auth"``).
+        The built-in UI is mounted separately, after this router is included,
+        with :func:`~awesome_python_auth.ui_router.mount_ui`.
+
         Parameters
         ----------
         settings_store:

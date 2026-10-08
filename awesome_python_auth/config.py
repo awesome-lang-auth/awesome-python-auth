@@ -7,6 +7,11 @@ from typing import Any, Callable, Coroutine
 
 from .models import StoredUser, UserStore
 
+#: Default URL prefix of the auth API, the same on every awesome-lang-auth backend.
+#: The built-in UI is served under ``<prefix>/ui`` (``/auth/ui/login``,
+#: ``/auth/ui/auth.js``).  In 1.x it was ``"/api/auth"``.
+DEFAULT_API_PREFIX = "/auth"
+
 
 @dataclass
 class AuthConfig:
@@ -18,7 +23,10 @@ class AuthConfig:
         URL prefix where the auth router will be mounted.
         Must match the ``apiPrefix`` setting in ``ng-awesome-node-auth`` /
         ``AuthOptions.apiPrefix`` in ``awesome-node-auth-flutter``.
-        Default: ``"/api/auth"``.
+        The built-in UI (:func:`~awesome_python_auth.ui_router.mount_ui`) is
+        served under ``<api_prefix>/ui``.
+        Default: ``"/auth"`` (``"/api/auth"`` in 1.x; pass
+        ``api_prefix="/api/auth"`` to keep the old routes).
     access_token_secret:
         Secret used to sign JWT access tokens.  Keep this private.
     access_token_expires_in:
@@ -38,7 +46,7 @@ class AuthConfig:
     totp_issuer:
         Issuer name shown in authenticator apps.  Default: ``"awesome-python-auth"``.
     ui_config:
-        Static UI configuration returned by ``GET /ui/config``.
+        Static UI configuration returned by ``GET <api_prefix>/ui/config``.
     email:
         Optional email configuration dict.  Keys depend on the provider.
         Pass ``{"enabled": True}`` to signal that email sending is active.
@@ -113,7 +121,7 @@ class AuthConfig:
         secret.
     """
 
-    api_prefix: str = "/api/auth"
+    api_prefix: str = DEFAULT_API_PREFIX
     access_token_secret: str = ""
     access_token_expires_in: int = 900
     refresh_token_expires_in: int = 604800
@@ -183,4 +191,4 @@ class AuthConfig:
 # Import here to avoid circular dependency
 from .router import AuthConfigurator  # noqa: E402
 
-__all__ = ["AuthConfig", "AuthConfigurator"]
+__all__ = ["AuthConfig", "AuthConfigurator", "DEFAULT_API_PREFIX"]

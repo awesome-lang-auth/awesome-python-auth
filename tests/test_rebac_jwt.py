@@ -50,7 +50,7 @@ class TestJwtRbacEnrichment:
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             r = await client.post(
-                "/api/auth/login",
+                "/auth/login",
                 json={"email": "user@example.com", "password": "password123"},
                 headers={"X-Auth-Strategy": "bearer"},
             )
@@ -90,7 +90,7 @@ class TestJwtRbacEnrichment:
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             r = await client.post(
-                "/api/auth/login",
+                "/auth/login",
                 json={"email": "basic@example.com", "password": "pass"},
                 headers={"X-Auth-Strategy": "bearer"},
             )
@@ -127,7 +127,7 @@ class TestJwtRbacEnrichment:
 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             r = await client.post(
-                "/api/auth/login",
+                "/auth/login",
                 json={"email": "tenant@example.com", "password": "pass"},
                 headers={"X-Auth-Strategy": "bearer"},
             )

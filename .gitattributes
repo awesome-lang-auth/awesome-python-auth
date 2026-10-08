@@ -1,0 +1,3 @@
+# auth.js is vendored byte-for-byte from awesome-node-auth (src/ui/assets/auth.js) and
+# pinned by sha256 in tests/test_auth_js_reference.py: keep it LF on every checkout.
+awesome_python_auth/ui_assets/auth.js text eol=lf

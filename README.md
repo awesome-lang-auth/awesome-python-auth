@@ -31,7 +31,7 @@ Supports **both authentication strategies** used by those clients:
 | RBAC | ✅ Implemented | `RolesPermissionsStore` with token enrichment and role-based dependencies. |
 | Multi-tenancy | ✅ Implemented | `TenantStore` and tenant-aware models are available. |
 | Admin panel | ✅ Implemented | `build_admin_router(...)` serves the bundled admin SPA and APIs. |
-| Built-in UI + auth runtime (`auth.js`) | ✅ Implemented | `build_ui_router(...)` serves bundled pages/assets with runtime helpers. |
+| Built-in UI + auth runtime (`auth.js`) | ✅ Implemented | `mount_ui(app, config)` serves the bundled pages and `auth.js` under `<api_prefix>/ui` (`/auth/ui/auth.js` by default), the same route as the other backends. |
 | Client libraries compatibility (Angular + Flutter) | ✅ Implemented | Cookie+CSRF (web) and bearer (native) client strategies are both supported. |
 | Event-driven tooling (event bus, SSE, inbound/outbound webhooks, telemetry, notify channels) | ✅ Implemented | `AuthTools`, `AuthEventBus`, SSE, webhooks, telemetry, and `notify()` channels are available. |
 | API keys (M2M) | ✅ Implemented | `ApiKeyService`/`ApiKeyStore` plus auth/admin API-key endpoints are available. |
@@ -52,27 +52,56 @@ pip install awesome-python-auth
 
 ```python
 from fastapi import FastAPI
-from awesome_python_auth import AuthConfig, AuthConfigurator, CsrfMiddleware
+from awesome_python_auth import AuthConfig, AuthConfigurator, CsrfMiddleware, mount_ui
 from awesome_python_auth.models import InMemoryUserStore
 
 app = FastAPI()
 
-# 1. Configure
+# 1. Configure (api_prefix defaults to "/auth", as on every awesome-lang-auth backend)
 user_store = InMemoryUserStore()
 config = AuthConfig(
-    api_prefix="/api/auth",
     access_token_secret="your-secret-here",  # must match the Angular/Flutter client config
 )
 
 # 2. Add CSRF middleware (required for Angular web clients)
-app.add_middleware(CsrfMiddleware, api_prefix="/api/auth")
+app.add_middleware(CsrfMiddleware)
 
-# 3. Mount the auth router
+# 3. Mount the auth router: /auth/login, /auth/me, ...
 configurator = AuthConfigurator(config, user_store)
 app.include_router(configurator.router())
+
+# 4. Optional: the built-in UI, after the router: /auth/ui/login, /auth/ui/auth.js
+mount_ui(app, config)
 ```
 
-Point Angular/Flutter clients at `http://your-server/api/auth` — no other changes needed.
+Point Angular/Flutter clients at `http://your-server/auth` — no other changes needed.
+
+---
+
+## Migrating from 1.x: the default prefix is now `/auth`
+
+Since 2.0.0 the auth API is served under `/auth` by default, like every other
+awesome-lang-auth backend (1.x used `/api/auth`). To keep the 1.x routes, set the
+prefix explicitly, on the config and on the CSRF middleware:
+
+```python
+config = AuthConfig(api_prefix="/api/auth", access_token_secret="...")
+app.add_middleware(CsrfMiddleware, api_prefix="/api/auth")
+```
+
+**Change both or neither.** If `AuthConfig.api_prefix` and
+`CsrfMiddleware(api_prefix=...)` differ, CSRF is not enforced on the auth routes and
+nothing warns. If you already pass `api_prefix="/api/auth"` to `AuthConfig` but add
+`CsrfMiddleware` without it, pass the same value to the middleware now: left at its
+default it protects `/auth`, not your routes. To adopt `/auth`, remove `api_prefix`
+from both.
+
+Everything else follows `api_prefix`: the routes, the JWKS endpoint, and the
+built-in UI mounted with `mount_ui(app, config)` (then at `/api/auth/ui/login` and
+`/api/auth/ui/auth.js`). Payloads and cookies are unchanged. If you mounted
+`build_ui_router(...)` yourself at `/auth/ui` next to an API at `/api/auth`, switch
+to `mount_ui(app, config)`: `auth.js` derives the API prefix from the page URL, so
+the UI belongs under the API prefix.
 
 ---
 
@@ -82,7 +111,7 @@ Point Angular/Flutter clients at `http://your-server/api/auth` — no other chan
 from awesome_python_auth import AuthConfig
 
 config = AuthConfig(
-    api_prefix="/api/auth",          # Must match client's apiPrefix
+    api_prefix="/auth",              # Default; must match the client's apiPrefix
     access_token_secret="secret",   # JWT signing secret (keep private!)
     access_token_expires_in=900,    # Access token lifetime (seconds, default 15 min)
     refresh_token_expires_in=604800,# Refresh token lifetime (seconds, default 7 days)
@@ -158,7 +187,7 @@ async def admin_only(user: AuthUser = Depends(require_roles(["admin"]))):
 
 ## API Endpoints
 
-All endpoints are mounted under `api_prefix` (default: `/api/auth`).
+All endpoints are mounted under `api_prefix` (default: `/auth`; it was `/api/auth` in 1.x).
 
 ### Session
 | Method | Path | Description |
@@ -231,6 +260,38 @@ All endpoints are mounted under `api_prefix` (default: `/api/auth`).
 
 ---
 
+## Built-in UI and `auth.js`
+
+`mount_ui(app, config)` serves the bundled login pages and the `auth.js` runtime
+under `<api_prefix>/ui`, the same route as every other awesome-lang-auth backend:
+
+| | Default (`api_prefix="/auth"`) | `api_prefix="/api/auth"` |
+|---|---|---|
+| Login page | `/auth/ui/login` | `/api/auth/ui/login` |
+| Runtime script | `/auth/ui/auth.js` | `/api/auth/ui/auth.js` |
+
+```python
+from awesome_python_auth import mount_ui
+
+app.include_router(configurator.router())  # first: it owns <api_prefix>/ui/config
+mount_ui(app, config)                      # then the UI, under <api_prefix>/ui
+```
+
+`auth.js` is the awesome-node-auth runtime, shipped byte for byte. It derives the
+API prefix from the page URL (everything before `/ui/`) and falls back to `/auth`
+on any other page, so with the default prefix an SPA that loads
+`<script src="/auth/ui/auth.js"></script>` needs no configuration. With a custom
+prefix, pages outside the UI call `AwesomeNodeAuth.init({ apiPrefix: '/api/auth' })`.
+Pass `ui_assets_dir=` for custom pages, or `headless=True` when your SPA has its
+own login pages (the static assets, `auth.js` included, are still served).
+`GET <api_prefix>/ui/config` is answered by the auth router with
+`AuthConfig.ui_config`, which reports `headless` only if you put it there, so in
+headless mode the SPA calls `AwesomeNodeAuth.init({ headless: true })` itself.
+`build_ui_router(...)` and `ui_mount_path(prefix)` remain available to mount the
+UI by hand.
+
+---
+
 ## Hooks / Callbacks
 
 Plug in side-effects (email sending, SMS, OAuth) without subclassing:
@@ -286,7 +347,7 @@ The `CsrfMiddleware` is required when Angular web clients are used. It:
 ```python
 app.add_middleware(
     CsrfMiddleware,
-    api_prefix="/api/auth",
+    api_prefix="/auth",     # Default; keep equal to AuthConfig.api_prefix
     cookie_secure=True,     # Set False for local HTTP development
     cookie_same_site="lax",
 )
@@ -445,7 +506,7 @@ from awesome_python_auth import AuthConfig, AuthConfigurator
 from awesome_python_auth.idp import IdProviderConfig
 
 config = AuthConfig(
-    api_prefix="/api/auth",
+    api_prefix="/auth",
     access_token_secret=os.environ["JWT_SECRET"],   # still used for refresh-token lookup
     id_provider=IdProviderConfig(
         enabled=True,
@@ -462,7 +523,7 @@ configurator = AuthConfigurator(config, user_store)
 app.include_router(configurator.router())
 ```
 
-The JWKS endpoint is automatically mounted at `{api_prefix}{jwks_path}` (default: `/api/auth/.well-known/jwks.json`).
+The JWKS endpoint is automatically mounted at `{api_prefix}{jwks_path}` (default: `/auth/.well-known/jwks.json`).
 
 > **Development tip**: when `private_key` is omitted an ephemeral RSA-2048 keypair is auto-generated at startup with a warning.  All tokens are invalidated on restart — **never use this in production**.
 
@@ -489,7 +550,7 @@ config = AuthConfig(
     access_token_secret="...",       # still required
     resource_server=ResourceServerConfig(
         enabled=True,
-        jwks_url="https://auth.myplatform.com/api/auth/.well-known/jwks.json",
+        jwks_url="https://auth.myplatform.com/auth/.well-known/jwks.json",
         issuer="https://auth.myplatform.com",   # optional — tokens with wrong iss are rejected
         jwks_cache_ttl=3600,        # 1 hour cache (seconds)
         jwks_fetch_timeout=5.0,     # seconds
@@ -515,14 +576,14 @@ from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 
 from awesome_python_auth import (
-    AuthConfig, AuthConfigurator, CsrfMiddleware, require_auth,
+    AuthConfig, AuthConfigurator, CsrfMiddleware, mount_ui, require_auth,
 )
 from awesome_python_auth.models import AuthUser, InMemoryUserStore
 
 user_store = InMemoryUserStore()
 
 config = AuthConfig(
-    api_prefix="/api/auth",
+    api_prefix="/auth",  # the default
     access_token_secret=os.environ["JWT_SECRET"],
     cookie_secure=False,  # True in production
 )
@@ -541,10 +602,11 @@ app.add_middleware(
     allow_headers=["*", "X-CSRF-Token", "X-Auth-Strategy"],
 )
 
-app.add_middleware(CsrfMiddleware, api_prefix="/api/auth", cookie_secure=False)
+app.add_middleware(CsrfMiddleware, api_prefix="/auth", cookie_secure=False)
 
 configurator = AuthConfigurator(config, user_store)
 app.include_router(configurator.router())
+mount_ui(app, config)  # /auth/ui/login, /auth/ui/auth.js
 
 @app.get("/api/todos")
 async def todos(user: AuthUser = Depends(require_auth)):
@@ -564,7 +626,7 @@ import { provideAuth, provideAuthUi } from '@awesome-lang-auth/angular';
 
 export const appConfig: ApplicationConfig = {
   providers: [
-    provideAuth({ apiPrefix: '/api/auth' }),
+    provideAuth({ apiPrefix: '/auth' }),
     provideAuthUi(),
   ]
 };
@@ -579,7 +641,7 @@ No other changes needed — the Angular library sends cookies + CSRF headers aut
 ```dart
 // Native (iOS/Android/Desktop)
 final auth = AuthClient(AuthOptions(
-  apiPrefix: 'http://your-server/api/auth',
+  apiPrefix: 'http://your-server/auth',
 ));
 await auth.checkSession();
 

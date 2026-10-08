@@ -7,22 +7,24 @@ forgot-password, reset-password, verify-email, magic-link, 2fa) with
 Server-Side Rendering (SSR) of the UI configuration, branding colours, and
 the ``window.__AUTH_CONFIG__`` bootstrap script.
 
-Usage::
+The UI lives under ``<api_prefix>/ui``, as on every awesome-lang-auth backend:
+with the default prefix the pages are at ``/auth/ui/login`` and the runtime
+script at ``/auth/ui/auth.js``.  ``auth.js`` derives the API prefix from the
+page URL (everything before ``/ui/``), so the UI has to sit under the prefix
+of the auth router it talks to.  :func:`mount_ui` mounts it there::
 
-    from awesome_python_auth.ui_router import build_ui_router
+    from awesome_python_auth import AuthConfigurator, mount_ui
 
-    app.mount(
-        "/auth/ui",
-        build_ui_router(config=auth_config),
-        name="auth_ui",
-    )
+    app.include_router(AuthConfigurator(auth_config, user_store).router())
+    mount_ui(app, auth_config)  # -> <api_prefix>/ui, /auth/ui by default
 
 Or with a custom assets directory::
 
-    app.mount(
-        "/auth/ui",
-        build_ui_router(config=auth_config, ui_assets_dir="/path/to/custom/ui"),
-    )
+    mount_ui(app, auth_config, ui_assets_dir="/path/to/custom/ui")
+
+Include the auth router **before** mounting the UI: the auth router owns
+``GET <api_prefix>/ui/config`` and FastAPI matches routes in the order they
+were added.
 """
 
 from __future__ import annotations
@@ -37,6 +39,8 @@ from fastapi import FastAPI, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
+from .config import DEFAULT_API_PREFIX
+
 # Directory bundled with the package
 _BUNDLED_ASSETS = Path(__file__).parent / "ui_assets"
 
@@ -49,6 +53,9 @@ def build_ui_router(
     headless: bool = False,
 ) -> FastAPI:
     """Build a mini FastAPI application that serves the auth UI.
+
+    Mount it at ``ui_mount_path(api_prefix)`` (or let :func:`mount_ui` do it)
+    so ``auth.js`` finds the API from the page URL.
 
     Parameters
     ----------
@@ -66,7 +73,7 @@ def build_ui_router(
     """
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 
-    resolved_api_prefix: str = api_prefix or getattr(config, "api_prefix", "/api/auth")
+    resolved_api_prefix: str = api_prefix or getattr(config, "api_prefix", DEFAULT_API_PREFIX)
     assets_path = Path(ui_assets_dir) if ui_assets_dir else _BUNDLED_ASSETS
 
     # ── /config ───────────────────────────────────────────────────────────────
@@ -132,6 +139,54 @@ def build_ui_router(
 
     _mount_static(app, assets_path)
     return app
+
+
+def ui_mount_path(api_prefix: str = DEFAULT_API_PREFIX) -> str:
+    """Return where the built-in UI is mounted for *api_prefix*: ``<api_prefix>/ui``.
+
+    ``ui_mount_path()`` is ``"/auth/ui"``; ``ui_mount_path("/api/auth")`` is
+    ``"/api/auth/ui"``.
+    """
+    return f"{api_prefix.rstrip('/')}/ui"
+
+
+def mount_ui(
+    app: FastAPI,
+    config: Any,  # AuthConfig
+    *,
+    ui_assets_dir: str | Path | None = None,
+    headless: bool = False,
+    name: str = "auth_ui",
+) -> str:
+    """Mount the built-in UI under ``<config.api_prefix>/ui`` and return that path.
+
+    With the default prefix the login page is ``/auth/ui/login`` and the
+    runtime script is ``/auth/ui/auth.js``; with ``api_prefix="/api/auth"``
+    they move to ``/api/auth/ui/login`` and ``/api/auth/ui/auth.js``.
+
+    Call it after ``app.include_router(configurator.router())``: the auth router
+    serves ``GET <api_prefix>/ui/config`` and routes match in the order they were
+    added, so mounting the UI first would shadow that endpoint.
+
+    Parameters
+    ----------
+    app:
+        The FastAPI application.
+    config:
+        The :class:`~awesome_python_auth.config.AuthConfig` instance whose
+        ``api_prefix`` the auth router uses.
+    ui_assets_dir, headless:
+        Passed to :func:`build_ui_router`.
+    name:
+        Route name of the mount.  Default: ``"auth_ui"``.
+    """
+    path = ui_mount_path(getattr(config, "api_prefix", DEFAULT_API_PREFIX))
+    app.mount(
+        path,
+        build_ui_router(config=config, ui_assets_dir=ui_assets_dir, headless=headless),
+        name=name,
+    )
+    return path
 
 
 # ---------------------------------------------------------------------------

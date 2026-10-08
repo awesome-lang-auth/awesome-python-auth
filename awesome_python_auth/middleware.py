@@ -18,6 +18,8 @@ from starlette.requests import Request
 from starlette.responses import Response
 from starlette.types import ASGIApp
 
+from .config import DEFAULT_API_PREFIX
+
 _SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "TRACE"})
 _CSRF_COOKIE_NAMES = ("__Host-csrf-token", "__Secure-csrf-token", "csrf-token")
 _CSRF_HEADER = "x-csrf-token"
@@ -29,13 +31,16 @@ class CsrfMiddleware(BaseHTTPMiddleware):
 
     Attach to your FastAPI application **before** including the auth router::
 
-        app.add_middleware(CsrfMiddleware, api_prefix="/api/auth")
+        app.add_middleware(CsrfMiddleware)  # api_prefix defaults to "/auth"
 
     Parameters
     ----------
     api_prefix:
-        The path prefix where the auth router is mounted.  CSRF validation is
-        only enforced for requests to this prefix.
+        The path prefix where the auth router is mounted; keep it equal to
+        ``AuthConfig.api_prefix``.  CSRF validation is only enforced for
+        requests to this prefix (the prefix itself or a path below it, so
+        ``/auth`` does not cover ``/authors``).  Default: ``"/auth"``
+        (``"/api/auth"`` in 1.x).
     exclude_paths:
         Additional URL path suffixes to skip CSRF validation on (e.g. refresh,
         login).  Auth-flow endpoints that do not require an active session are
@@ -52,14 +57,14 @@ class CsrfMiddleware(BaseHTTPMiddleware):
     def __init__(
         self,
         app: ASGIApp,
-        api_prefix: str = "/api/auth",
+        api_prefix: str = DEFAULT_API_PREFIX,
         exclude_paths: list[str] | None = None,
         cookie_secure: bool = True,
         cookie_same_site: str = "lax",
         cookie_prefix: str | None = None,
     ) -> None:
         super().__init__(app)
-        self._prefix = api_prefix
+        self._prefix = api_prefix.rstrip("/")
         self._cookie_secure = cookie_secure
         self._cookie_same_site = cookie_same_site
         self._csrf_cookie_name = f"{cookie_prefix}{_CSRF_COOKIE}" if cookie_prefix else _CSRF_COOKIE
@@ -82,6 +87,12 @@ class CsrfMiddleware(BaseHTTPMiddleware):
         self._excluded_suffixes = frozenset(base_excluded)
 
     # ------------------------------------------------------------------
+
+    def _is_under_prefix(self, path: str) -> bool:
+        """Return True when *path* is the API prefix or a path below it."""
+        if not self._prefix:
+            return True
+        return path == self._prefix or path.startswith(self._prefix + "/")
 
     def _is_excluded(self, path: str) -> bool:
         """Return True when CSRF validation should be skipped for *path*."""
@@ -112,7 +123,7 @@ class CsrfMiddleware(BaseHTTPMiddleware):
         path = request.url.path
 
         # Only enforce CSRF for requests targeting the auth API
-        if path.startswith(self._prefix) and request.method not in _SAFE_METHODS:
+        if self._is_under_prefix(path) and request.method not in _SAFE_METHODS:
             if not self._uses_bearer(request) and not self._is_excluded(path):
                 cookie_token = self._read_csrf_cookie(request)
                 header_token = request.headers.get(_CSRF_HEADER)
