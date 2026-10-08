@@ -31,6 +31,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `disable_2fa_auth_2fa_disable_post`) (#17). Clients generated from the OpenAPI
   document keep their method names if you pin `api_prefix="/api/auth"`.
 
+- Apps that mounted `build_ui_router(...)` themselves at `/auth/ui` next to an API at
+  `/api/auth` should switch to `mount_ui(app, config)`: `auth.js` derives the API prefix
+  from the page URL, so the UI belongs under the API prefix (#17).
+
 - `GET <api_prefix>/ui/config` returns awesome-node-auth's document, byte for byte with
   the defaults: `apiPrefix`, `features`, `ui`, `translations`, `lang` and `headless`, in
   that order (#18).
@@ -92,9 +96,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `features.register` in the auth router's `/ui/config` is also `true` when
   `router(on_register=...)` is set, as with awesome-node-auth's `onRegister` (#18). The
   built-in UI's `/config` reads `AuthConfig.on_register` and `ui_config` only.
-- The package description and the README name the current client libraries,
-  `@awesome-lang-auth/angular` and `awesome_flutter_auth`; the README's install
-  commands, imports and repository links use the new names (#15).
+- The package description names the current client libraries,
+  `@awesome-lang-auth/angular` and `awesome_flutter_auth`; the README does too, in its
+  compatibility list, section headings and Angular import (#15).
 - Package metadata now has project URLs (1.1.0 had none): Homepage, Documentation,
   Repository, Issues and Changelog. Repository and Issues point to the
   `awesome-lang-auth` GitHub organization (#11).
