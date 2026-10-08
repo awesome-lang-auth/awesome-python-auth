@@ -5,15 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] - 2.0.0
+## [2.0.0] - 2026-10-08
 
 ### BREAKING CHANGES
 
 - The default API prefix is now `/auth` (it was `/api/auth`), the same as every other
-  awesome-lang-auth backend. `AuthConfig.api_prefix` and `CsrfMiddleware(api_prefix=...)`
-  both default to `/auth`; the new constant `DEFAULT_API_PREFIX` holds it. Routes,
-  payloads and cookies are otherwise unchanged. To keep the 1.x routes, set the prefix
-  explicitly on both:
+  awesome-lang-auth backend (#17). `AuthConfig.api_prefix` and
+  `CsrfMiddleware(api_prefix=...)` both default to `/auth`; the new constant
+  `DEFAULT_API_PREFIX` holds it. Routes, payloads and cookies are otherwise unchanged.
+  To keep the 1.x routes, set the prefix explicitly on both:
 
   ```python
   config = AuthConfig(api_prefix="/api/auth", access_token_secret="...")
@@ -23,16 +23,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Change both or neither: if `AuthConfig.api_prefix` and `CsrfMiddleware(api_prefix=...)`
   differ, CSRF is not enforced on the auth routes and nothing warns. An app that already
   passes `api_prefix="/api/auth"` to `AuthConfig` only must now pass it to
-  `CsrfMiddleware` too. To adopt `/auth`, remove `api_prefix` from both.
+  `CsrfMiddleware` too. To adopt `/auth`, remove `api_prefix` from both, and point the
+  front ends that call `/api/auth/...` to `/auth/...`.
 
 - FastAPI derives OpenAPI `operationId`s from the route path, so with the new default
   they change too (`disable_2fa_api_auth_2fa_disable_post` becomes
-  `disable_2fa_auth_2fa_disable_post`). Clients generated from the OpenAPI document
-  keep their method names if you pin `api_prefix="/api/auth"`.
+  `disable_2fa_auth_2fa_disable_post`) (#17). Clients generated from the OpenAPI
+  document keep their method names if you pin `api_prefix="/api/auth"`.
+
+- Apps that mounted `build_ui_router(...)` themselves at `/auth/ui` next to an API at
+  `/api/auth` should switch to `mount_ui(app, config)`: `auth.js` derives the API prefix
+  from the page URL, so the UI belongs under the API prefix (#17).
 
 - `GET <api_prefix>/ui/config` returns awesome-node-auth's document, byte for byte with
   the defaults: `apiPrefix`, `features`, `ui`, `translations`, `lang` and `headless`, in
-  that order.
+  that order (#18).
   - On the auth router it used to return the raw `AuthConfig.ui_config` dict (`{}` by
     default). `ui_config` (or the `"ui_config"` entry of the `settings_store` passed to
     `router()`) is now read as `{"features": {...}, "ui": {...}, "headless": bool}`, and
@@ -52,48 +57,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `<api_prefix>/ui/auth.js` (the awesome-node-auth `auth.js`, byte for byte) and
   `GET <api_prefix>/ui/config` answer as soon as the router is included, at
   `/auth/ui/auth.js` by default and under a custom prefix with it
-  (`/api/auth/ui/auth.js`), as on every awesome-lang-auth backend. Without the pages,
-  `/ui/login` answers 404 while `auth.js` answers 200. `/ui/config` reports `headless`
-  from `ui_config["headless"]` (`false` unless set), as awesome-node-auth reports
-  `ui.headless`; SPAs with their own login pages set it. Its `apiPrefix` is the prefix
-  the request came through, as awesome-node-auth takes it from `req.baseUrl`:
+  (`/api/auth/ui/auth.js`), as on every awesome-lang-auth backend (#18). Without the
+  pages, `/ui/login` answers 404 while `auth.js` answers 200. `/ui/config` reports
+  `headless` from `ui_config["headless"]` (`false` unless set), as awesome-node-auth
+  reports `ui.headless`; SPAs with their own login pages set it. Its `apiPrefix` is the
+  prefix the request came through, as awesome-node-auth takes it from `req.baseUrl`:
   `/v1/auth` under `app.include_router(router, prefix="/v1")`, `/api/auth` inside a
   sub-application mounted at `/api`, and a server `root_path` is included.
 - `mount_ui(app, config)` mounts the optional built-in pages under `<api_prefix>/ui`
-  (`/auth/ui/login` by default). `auth.js` derives the API prefix from the page URL,
-  as on awesome-node-auth. `ui_mount_path(prefix)` returns the mount path.
+  (`/auth/ui/login` by default) (#17, #18). `auth.js` derives the API prefix from the
+  page URL, as on awesome-node-auth. `ui_mount_path(prefix)` returns the mount path.
 - `build_ui_router()` and `mount_ui()` take a `settings_store`, read like the router's
-  for `/config` and the pages.
+  for `/config` and the pages (#18).
+- The auth router and the admin router publish identity events automatically (#13).
+  Auth router: login success/failure, logout, session rotation, user created/deleted,
+  password changed, email verified/changed, 2FA enabled/disabled, OAuth
+  success/conflict. Admin router: role assigned/revoked.
+- New optional `event_bus` argument on `AuthConfigurator.router()` and
+  `build_admin_router()`, and new optional `AuthConfig.event_bus` field (#13). The
+  argument wins over the field. The auth router also falls back to
+  `AuthConfig.tools.event_bus`, so apps that already pass `AuthTools(event_bus=...)`
+  start receiving these events on that bus.
+- New event name `AuthEventNames.USER_EMAIL_CHANGED` (`identity.user.email.changed`),
+  published on email change (#13).
 
 ### Changed
 
 - `CsrfMiddleware` matches its prefix on whole path segments: with `/auth` it checks
-  `/auth` and `/auth/...`, not unrelated routes such as `/authors`.
+  `/auth` and `/auth/...`, not unrelated routes such as `/authors` (#17).
 - The built-in UI app (`build_ui_router()`, which `mount_ui` uses) mounted at
   `<api_prefix>/ui` serves everything under that path, `auth.js` and `/config`
   included, whether it is added before or after the auth router; the router's two
-  routes step aside. Its `/config` reports its own `headless` switch (`false` when it
-  serves the pages). Another app mounted there, such as a host's `StaticFiles`, does
-  not make the router step aside.
+  routes step aside (#18). Its `/config` reports its own `headless` switch (`false`
+  when it serves the pages). Another app mounted there, such as a host's `StaticFiles`,
+  does not make the router step aside.
 - The built-in UI serves the bundled `auth.js` when a custom `ui_assets_dir` has none,
-  and answers `HEAD` for it.
+  and answers `HEAD` for it (#18).
 - `features.register` in the auth router's `/ui/config` is also `true` when
-  `router(on_register=...)` is set, as with awesome-node-auth's `onRegister`. The
+  `router(on_register=...)` is set, as with awesome-node-auth's `onRegister` (#18). The
   built-in UI's `/config` reads `AuthConfig.on_register` and `ui_config` only.
+- The package description names the current client libraries,
+  `@awesome-lang-auth/angular` and `awesome_flutter_auth`; the README does too, in its
+  compatibility list, section headings and Angular import (#15).
+- Package metadata now has project URLs (1.1.0 had none): Homepage, Documentation,
+  Repository, Issues and Changelog. Repository and Issues point to the
+  `awesome-lang-auth` GitHub organization (#11).
+- Admin `POST /api/users/{user_id}/roles` now passes an optional `tenantId` from the
+  request body to `RolesPermissionsStore.add_role_to_user(..., tenant_id=...)`; it was
+  ignored before (#13).
 
 ### Fixed
 
 - The auth router's own `GET <api_prefix>/ui/config` no longer hides the built-in UI's
   node-shaped one: with the UI mounted at `<api_prefix>/ui`, the endpoint returned the
-  raw `ui_config` (`{}`) whenever the router had been included first.
+  raw `ui_config` (`{}`) whenever the router had been included first (#18).
 - The built-in UI mounted at `<api_prefix>/ui` inside a sub-application reported
   `apiPrefix` without the sub-application's path (`/auth` instead of `/api/auth`), in
-  `/config` and in the pages, so `auth.js` called routes that did not exist.
+  `/config` and in the pages, so `auth.js` called routes that did not exist (#18).
 - The bundled `auth.js` had lost its first line (`/**`), so browsers rejected it with a
-  syntax error and `window.AwesomeNodeAuth` was never defined. It is again the
+  syntax error and `window.AwesomeNodeAuth` was never defined (#17). It is again the
   awesome-node-auth runtime byte for byte (the file shipped in `@awesome-lang-auth/node`
   1.10.8); a test pins its sha256, checks the served bytes, and runs `node --check` on
   them when Node.js is available.
+- `POST /change-email/confirm` in cookie mode no longer fails with a server error when it
+  re-issues the auth cookies (#13).
+- Test-only: the router tests pass with pytest-asyncio 1.4.0 (#12).
 
 ---
 
