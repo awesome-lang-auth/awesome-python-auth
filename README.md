@@ -7,8 +7,8 @@
 **FastAPI authentication library** that replicates the [awesome-node-auth](https://github.com/awesome-lang-auth/awesome-node-auth) Node.js backend in Python.
 
 Fully compatible with:
-- **[ng-awesome-node-auth](https://github.com/awesome-lang-auth/awesome-angular-auth)** — Angular client library
-- **[awesome-node-auth-flutter](https://github.com/awesome-lang-auth/awesome-flutter-auth)** — Flutter/Dart client library
+- **[@awesome-lang-auth/angular](https://github.com/awesome-lang-auth/awesome-angular-auth)** — Angular client library
+- **[awesome_flutter_auth](https://github.com/awesome-lang-auth/awesome-flutter-auth)** — Flutter/Dart client library
 
 Supports **both authentication strategies** used by those clients:
 | Platform | Strategy | Token |
@@ -556,11 +556,11 @@ if __name__ == "__main__":
 
 ---
 
-## Angular Integration (`ng-awesome-node-auth`)
+## Angular Integration (`@awesome-lang-auth/angular`)
 
 ```typescript
 // app.config.ts
-import { provideAuth, provideAuthUi } from 'ng-awesome-node-auth';
+import { provideAuth, provideAuthUi } from '@awesome-lang-auth/angular';
 
 export const appConfig: ApplicationConfig = {
   providers: [
@@ -574,7 +574,7 @@ No other changes needed — the Angular library sends cookies + CSRF headers aut
 
 ---
 
-## Flutter Integration (`awesome-node-auth-flutter`)
+## Flutter Integration (`awesome_flutter_auth`)
 
 ```dart
 // Native (iOS/Android/Desktop)
