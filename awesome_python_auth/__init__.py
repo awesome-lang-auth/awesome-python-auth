@@ -7,17 +7,17 @@ FastAPI authentication library compatible with:
 
 Usage::
 
-    from awesome_python_auth import AuthConfigurator, AuthConfig, UserStore
+    from awesome_python_auth import AuthConfigurator, AuthConfig, UserStore, mount_ui
 
     config = AuthConfig(
-        api_prefix="/api/auth",
-        access_token_secret="your-secret",
+        access_token_secret="your-secret",  # api_prefix defaults to "/auth"
     )
     configurator = AuthConfigurator(config, user_store)
-    app.include_router(configurator.router())
+    app.include_router(configurator.router())  # /auth/login, /auth/me, ...
+    mount_ui(app, config)                      # /auth/ui/login, /auth/ui/auth.js
 """
 
-from .config import AuthConfig, AuthConfigurator
+from .config import DEFAULT_API_PREFIX, AuthConfig, AuthConfigurator
 from .dependencies import get_current_user, require_auth, require_roles
 from .models import AuthUser, SessionInfo, UserStore, SettingsStore, StoredUser, StoredSession, InMemoryUserStore
 from .middleware import CsrfMiddleware
@@ -34,7 +34,7 @@ from .webhooks import (
 from .sse import SseManager, StreamEvent
 from .tools import AuthTools, TelemetryStore, TelemetryEvent, InMemoryTelemetryStore
 from .tools_router import build_tools_router
-from .ui_router import build_ui_router
+from .ui_router import build_ui_router, mount_ui, ui_mount_path
 from .rebac import RolesPermissionsStore, InMemoryRolesPermissionsStore
 from .tenants import Tenant, TenantStore, InMemoryTenantStore
 from .token_store import TokenStore, InMemoryTokenStore
@@ -67,6 +67,7 @@ __all__ = [
     # Core
     "AuthConfig",
     "AuthConfigurator",
+    "DEFAULT_API_PREFIX",
     "AuthUser",
     "SessionInfo",
     "UserStore",
@@ -109,6 +110,8 @@ __all__ = [
     "build_tools_router",
     # UI
     "build_ui_router",
+    "mount_ui",
+    "ui_mount_path",
     # RBAC / ReBAC
     "RolesPermissionsStore",
     "InMemoryRolesPermissionsStore",

@@ -392,8 +392,8 @@ class TestAdminRouterEventPublishing:
 
         client = TestClient(app)
 
-        # Login as admin
-        client.post("/api/auth/login", json={"email": "admin@x.test", "password": "adminpw"})
+        # Login as admin (default api_prefix: /auth)
+        client.post("/auth/login", json={"email": "admin@x.test", "password": "adminpw"})
 
         # Assign role
         assign_res = client.post(

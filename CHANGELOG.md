@@ -5,6 +5,45 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] - 2.0.0
+
+### BREAKING CHANGES
+
+- The default API prefix is now `/auth` (it was `/api/auth`), the same as every other
+  awesome-lang-auth backend. `AuthConfig.api_prefix` and `CsrfMiddleware(api_prefix=...)`
+  both default to `/auth`; the new constant `DEFAULT_API_PREFIX` holds it. Routes,
+  payloads and cookies are otherwise unchanged. To keep the 1.x routes, set the prefix
+  explicitly on both:
+
+  ```python
+  config = AuthConfig(api_prefix="/api/auth", access_token_secret="...")
+  app.add_middleware(CsrfMiddleware, api_prefix="/api/auth")
+  ```
+
+### Added
+
+- `mount_ui(app, config)` mounts the built-in UI under `<api_prefix>/ui`, so the pages
+  and `auth.js` are at `/auth/ui/login` and `/auth/ui/auth.js` by default and move with
+  a custom prefix (`/api/auth/ui/auth.js` with `api_prefix="/api/auth"`). `auth.js`
+  derives the API prefix from the page URL, as on awesome-node-auth. Call it after
+  `app.include_router(configurator.router())`, which keeps answering
+  `GET <api_prefix>/ui/config`. `ui_mount_path(prefix)` returns the mount path.
+
+### Changed
+
+- `CsrfMiddleware` matches its prefix on whole path segments: with `/auth` it checks
+  `/auth` and `/auth/...`, not unrelated routes such as `/authors`.
+
+### Fixed
+
+- The bundled `auth.js` had lost its first line (`/**`), so browsers rejected it with a
+  syntax error and `window.AwesomeNodeAuth` was never defined. It is again the
+  awesome-node-auth runtime byte for byte (the file shipped in `@awesome-lang-auth/node`
+  1.10.8); a test pins its sha256, checks the served bytes, and runs `node --check` on
+  them when Node.js is available.
+
+---
+
 ## [1.1.0] - 2026-05-06
 
 ### Added
