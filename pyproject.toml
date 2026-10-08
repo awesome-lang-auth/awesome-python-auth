@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "awesome-python-auth"
-version = "1.1.0"
-description = "FastAPI authentication library compatible with ng-awesome-node-auth and awesome-node-auth-flutter"
+version = "1.2.0"
+description = "FastAPI authentication library compatible with @awesome-lang-auth/angular and awesome_flutter_auth"
 readme = "README.md"
 license = { text = "MIT" }
 authors = [{ name = "nik2208" }]
@@ -41,8 +41,11 @@ dev = [
 ]
 
 [project.urls]
+Homepage = "https://awesomelangauth.com/"
+Documentation = "https://awesomelangauth.com/docs/frameworks/python/"
 Repository = "https://github.com/awesome-lang-auth/awesome-python-auth"
 Issues = "https://github.com/awesome-lang-auth/awesome-python-auth/issues"
+Changelog = "https://github.com/awesome-lang-auth/awesome-python-auth/blob/main/CHANGELOG.md"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

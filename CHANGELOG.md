@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-10-08
+
+### Added
+
+- Identity events are published automatically (#13): the auth router publishes login
+  (success and failure), logout, session rotation, user created/deleted, password
+  changed, email verified/changed, 2FA enabled/disabled and OAuth success/conflict
+  events, and the admin router publishes role assigned/revoked, to the `AuthEventBus`
+  passed as the new `event_bus` argument of `AuthConfigurator.router()` /
+  `build_admin_router()` or set on the new `AuthConfig.event_bus` field (the auth router
+  also falls back to `AuthConfig.tools.event_bus`). New event name
+  `AuthEventNames.USER_EMAIL_CHANGED` (`identity.user.email.changed`).
+
+### Changed
+
+- Package description now names the current client libraries,
+  `@awesome-lang-auth/angular` and `awesome_flutter_auth`.
+- Project URLs: added Homepage, Documentation and Changelog; Repository and Issues point
+  to the `awesome-lang-auth` GitHub organization (#11).
+- Admin `POST /api/users/{user_id}/roles` now passes an optional `tenantId` from the
+  request body to `RolesPermissionsStore.add_role_to_user(..., tenant_id=...)`; it was
+  ignored before (#13).
+
+### Fixed
+
+- `POST /change-email/confirm` in cookie mode no longer fails with a server error when it
+  re-issues the auth cookies (#13).
+- Test-only: the router tests pass with pytest-asyncio 1.4.0 (#12).
+
+---
+
 ## [1.1.0] - 2026-05-06
 
 ### Added
